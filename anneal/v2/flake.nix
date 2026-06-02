@@ -570,6 +570,8 @@
             "    print(f\"  - Found {len(all_lean_files)} total .lean files.\")"
             "    unused_count = 0"
             "    for rel_lean in all_lean_files:"
+            "        if rel_lean == \"lakefile.lean\":"
+            "            continue"
             "        mod_path = os.path.splitext(rel_lean)[0]"
             "        if mod_path not in used_modules:"
             "            abs_lean = os.path.join(pkg_dir, rel_lean)"
