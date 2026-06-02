@@ -433,7 +433,7 @@
             "mkdir -p $TMPDIR/packages"
             "cp -r $mathlibCache/packages/* $TMPDIR/packages/"
             "chmod -R +w $TMPDIR/packages"
-            # 2.5. Populate the precompiled global build cache (.lake/build).
+            # 3. Populate the precompiled global build cache (.lake/build).
             #
             # Why: Lake compiles all object and bytecode files into a project-wide,
             # global build directory at the project root (`.lake/build/`). To ensure
@@ -442,7 +442,7 @@
             "mkdir -p .lake"
             "cp -r $mathlibCache/.lake/build .lake/"
             "chmod -R +w .lake"
-            # 2.7. Distribute precompiled global cache to individual path dependencies to enable offline replaying
+            # 4. Distribute precompiled global cache to individual path dependencies to enable offline replaying
             "python3 << 'EOF'"
             "import os"
             "import shutil"
@@ -481,7 +481,7 @@
             "        os.makedirs(dest_ir_dir, exist_ok=True)"
             "        shutil.copytree(src_ir_dir, os.path.join(dest_ir_dir, pkg_name), dirs_exist_ok=True)"
             "EOF"
-            # 3. Execute inline Python script to recursively rewrite all manifests
+            # 5. Execute inline Python script to recursively rewrite all manifests
             # and lakefiles to use local path dependencies. This allows Lake to resolve
             # all checkouts offline from local directories directly, bypassing all Git
             # checks and preventing it from triggering dynamic clones.
@@ -572,12 +572,12 @@
             ""
             "print(\"Successfully rewrote all lakefiles and manifests to use local path dependencies.\")"
             "EOF"
-            # 4. Compile Aeneas Lean backend offline
+            # 6. Compile Aeneas Lean backend offline
             # Lake resolves path checkouts directly and compiles Aeneas. This completes
             # instantly because all precompiled .olean bytecode objects are already
             # populated in our packages checkouts!
             "steam-run lake build"
-            # 4.5. Tree-shake and prune all dependencies and root Mathlib build cache to minimize omnibus size
+            # 7. Tree-shake and prune all dependencies and root Mathlib build cache to minimize omnibus size
             "python3 << 'EOF'"
             "import os"
             "import shutil"
@@ -658,7 +658,7 @@
             "        if f.startswith(\"Mathlib.\"):"
             "            os.remove(os.path.join(lib_lean_dir, f))"
             "EOF"
-            # 5. Structure output cleanly to match the relocatable layout:
+            # 8. Structure output cleanly to match the relocatable layout:
             # - `backends/lean/` containing the fully compiled Aeneas Lean project.
             # - `packages/` containing the local packages checkouts.
             # - `bin/` containing Aeneas project binaries (e.g., `aeneas`, `charon`).
