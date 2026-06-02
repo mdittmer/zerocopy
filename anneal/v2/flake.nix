@@ -443,44 +443,63 @@
             "cp -r $mathlibCache/.lake/build .lake/"
             "chmod -R +w .lake"
             # 4. Distribute precompiled global cache to individual path dependencies to enable offline replaying
-            "python3 << 'EOF'"
-            "import os"
-            "import shutil"
-            ""
-            "pkg_map = {"
-            "    \"mathlib\": \"Mathlib\","
-            "    \"batteries\": \"Batteries\","
-            "    \"Qq\": \"Qq\","
-            "    \"aesop\": \"Aesop\","
-            "    \"proofwidgets\": \"ProofWidgets\","
-            "    \"importGraph\": \"ImportGraph\","
-            "    \"LeanSearchClient\": \"LeanSearchClient\","
-            "    \"plausible\": \"Plausible\","
-            "    \"Cli\": \"Cli\""
-            "}"
-            ""
-            "global_cache = os.path.join(os.getcwd(), \".lake\", \"build\")"
-            "packages_dir = os.path.join(os.environ.get(\"TMPDIR\", \"/build\"), \"packages\")"
-            ""
-            "for dir_name, pkg_name in pkg_map.items():"
-            "    pkg_dir = os.path.join(packages_dir, dir_name)"
-            "    if not os.path.exists(pkg_dir): continue"
-            "    dest_lib_dir = os.path.join(pkg_dir, \".lake\", \"build\", \"lib\", \"lean\")"
-            "    os.makedirs(dest_lib_dir, exist_ok=True)"
-            "    src_lib_dir = os.path.join(global_cache, \"lib\", \"lean\", pkg_name)"
-            "    if os.path.exists(src_lib_dir):"
-            "        shutil.copytree(src_lib_dir, os.path.join(dest_lib_dir, pkg_name), dirs_exist_ok=True)"
-            "    src_root_lib_dir = os.path.join(global_cache, \"lib\", \"lean\")"
-            "    if os.path.exists(src_root_lib_dir):"
-            "        for f in os.listdir(src_root_lib_dir):"
-            "            if f.startswith(pkg_name + \".\"):"
-            "                shutil.copy2(os.path.join(src_root_lib_dir, f), dest_lib_dir)"
-            "    dest_ir_dir = os.path.join(pkg_dir, \".lake\", \"build\", \"ir\")"
-            "    src_ir_dir = os.path.join(global_cache, \"ir\", pkg_name)"
-            "    if os.path.exists(src_ir_dir):"
-            "        os.makedirs(dest_ir_dir, exist_ok=True)"
-            "        shutil.copytree(src_ir_dir, os.path.join(dest_ir_dir, pkg_name), dirs_exist_ok=True)"
-            "EOF"
+            ''
+              python3 << 'EOF'
+              import os
+              import shutil
+              import re
+
+              def discover_library_name(pkg_dir, dir_name):
+                  toml_path = os.path.join(pkg_dir, "lakefile.toml")
+                  if os.path.exists(toml_path):
+                      with open(toml_path, "r") as f:
+                          content = f.read()
+                      match = re.search(r"\[{1,2}lean_lib\]{1,2}(?:\s*\n|[^\[\]])*?name\s*=\s*\"([^\"]+)\"", content)
+                      if match:
+                          return match.group(1)
+                      match = re.search(r"^\s*name\s*=\s*\"([^\"]+)\"", content, re.MULTILINE)
+                      if match:
+                          return match.group(1).capitalize()
+
+                  lean_path = os.path.join(pkg_dir, "lakefile.lean")
+                  if os.path.exists(lean_path):
+                      with open(lean_path, "r") as f:
+                          content = f.read()
+                      match = re.search(r"lean_lib\s+(?:«([^»]+)»|\"([^\"]+)\"|([a-zA-Z0-9._-]+))", content)
+                      if match:
+                          return match.group(1) or match.group(2) or match.group(3)
+                      match = re.search(r"package\s+(?:«([^»]+)»|\"([^\"]+)\"|([a-zA-Z0-9._-]+))", content)
+                      if match:
+                          val = match.group(1) or match.group(2) or match.group(3)
+                          return val.capitalize()
+
+                  return dir_name.capitalize()
+
+              global_cache = os.path.join(os.getcwd(), ".lake", "build")
+              packages_dir = os.path.join(os.environ.get("TMPDIR", "/build"), "packages")
+
+              if os.path.exists(packages_dir):
+                  for dir_name in os.listdir(packages_dir):
+                      pkg_dir = os.path.join(packages_dir, dir_name)
+                      if not os.path.isdir(pkg_dir): continue
+                      pkg_name = discover_library_name(pkg_dir, dir_name)
+                      dest_lib_dir = os.path.join(pkg_dir, ".lake", "build", "lib", "lean")
+                      os.makedirs(dest_lib_dir, exist_ok=True)
+                      src_lib_dir = os.path.join(global_cache, "lib", "lean", pkg_name)
+                      if os.path.exists(src_lib_dir):
+                          shutil.copytree(src_lib_dir, os.path.join(dest_lib_dir, pkg_name), dirs_exist_ok=True)
+                      src_root_lib_dir = os.path.join(global_cache, "lib", "lean")
+                      if os.path.exists(src_root_lib_dir):
+                          for f in os.listdir(src_root_lib_dir):
+                              if f.startswith(pkg_name + "."):
+                                  shutil.copy2(os.path.join(src_root_lib_dir, f), dest_lib_dir)
+                      dest_ir_dir = os.path.join(pkg_dir, ".lake", "build", "ir")
+                      src_ir_dir = os.path.join(global_cache, "ir", pkg_name)
+                      if os.path.exists(src_ir_dir):
+                          os.makedirs(dest_ir_dir, exist_ok=True)
+                          shutil.copytree(src_ir_dir, os.path.join(dest_ir_dir, pkg_name), dirs_exist_ok=True)
+              EOF
+            ''
             # 5. Execute inline Python script to recursively rewrite all manifests
             # and lakefiles to use local path dependencies. This allows Lake to resolve
             # all checkouts offline from local directories directly, bypassing all Git
