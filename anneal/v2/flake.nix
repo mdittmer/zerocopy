@@ -160,8 +160,8 @@
       {
         packages.aeneas-download-linux-x86_64 = fetchAeneas {
           target = "linux-x86_64";
-          releaseTag = "build-2026.04.07.112215-42c0e90dacf486f7d3ed5b6cde3a9a81f04915a4";
-          sha256 = "a448682a154590e65b0794c42487583352375fc04bdd6b2418324f6ecafcc94f";
+          releaseTag = "nightly-2026.06.03";
+          sha256 = "00fb8ef427d4d06dcabd90f5196266e07731adf2a7466964ce6f4f6d1e8cbc11";
         };
 
         # A standard, offline derivation that unpacks the downloaded Aeneas
@@ -273,7 +273,7 @@
           # Fixed-output configuration to allow sandboxed network access
           outputHashMode = "recursive";
           outputHashAlgo = "sha256";
-          outputHash = "sha256-YBAHHLavdDQMeGI8jFhf8lJlwDzTe+R8QyZLqwXSyRg=";
+          outputHash = "sha256-tj5BeYGWSmXvYdzChrqaG9aN7so/+jAM5qWPI8tcN6U=";
 
           # Narrow inputs
           leanToolchainRaw = self.packages.${system}.lean-toolchain;
@@ -299,7 +299,8 @@
             "cp $metadataFiles/lean-toolchain project/"
             "cd project"
             # 2. Run lake exe cache get inside steam-run using the raw compiler
-            "export PATH=\"${pkgs.git}/bin:${pkgs.curl}/bin:\$PATH\""
+            "export PATH=\"$leanToolchainRaw/bin:${pkgs.git}/bin:${pkgs.curl}/bin:\$PATH\""
+            "export LEAN_SYSROOT=\"$leanToolchainRaw\""
             "steam-run $leanToolchainRaw/bin/lake exe cache get"
           ];
 
@@ -346,6 +347,7 @@
           src = pkgs.runCommand "empty-src" {} "mkdir $out";
 
           mathlibCache = self.packages.${system}.mathlib-cache-download;
+          leanToolchain = self.packages.${system}.lean-toolchain;
 
           nativeBuildInputs = with pkgs; [
             gnutar
@@ -359,8 +361,11 @@
             "chmod -R +w $out/packages"
             # 2. Locate the precompiled leantar binary inside the cache
             "LEANTAR_BIN=\$(find $mathlibCache/cache/mathlib -name \"leantar-*\" -type f -executable | head -n 1)"
+            "if [ -z \"\$LEANTAR_BIN\" ] && [ -x \"$leanToolchain/bin/leantar\" ]; then"
+            "  LEANTAR_BIN=\"$leanToolchain/bin/leantar\""
+            "fi"
             "if [ -z \"\$LEANTAR_BIN\" ]; then"
-            "  echo \"ERROR: leantar utility binary not found in mathlib cache!\""
+            "  echo \"ERROR: leantar utility binary not found in mathlib cache or Lean toolchain!\""
             "  exit 1"
             "fi"
             "echo \"Using leantar binary at: \$LEANTAR_BIN\""
@@ -411,6 +416,7 @@
           buildPhase = builtins.concatStringsSep "\n" [
             "export HOME=$TMPDIR"
             "export PATH=\"$leanToolchain/bin:\$PATH\""
+            "export LEAN_SYSROOT=\"$leanToolchain\""
             # Prepend the Lean toolchain library directories to LD_LIBRARY_PATH.
             #
             # Why: The Lean compiler binaries are dynamically linked to the Lean
@@ -543,20 +549,20 @@
             "# Rewrite Aeneas lakefile.lean (convert mathlib dependency to path)"
             "strict_replace("
             "    \"lakefile.lean\","
-            "    'require mathlib from git\\n  \"https://github.com/leanprover-community/mathlib4.git\" @ \"v4.28.0-rc1\"',"
+            "    'require mathlib from git\\n  \"https://github.com/leanprover-community/mathlib4.git\" @ \"v4.30.0-rc2\"',"
             "    'require mathlib from \"/build/packages/mathlib\"'"
             ")"
             ""
             "# Rewrite Mathlib lakefile.lean (convert all its nested dependencies to paths)"
             "mathlib_lakefile = \"/build/packages/mathlib/lakefile.lean\""
             "replacements = ["
-            "    (\"require \\\"leanprover-community\\\" / \\\"batteries\\\" @ git \\\"main\\\"\","
+            "    (\"require \\\"leanprover-community\\\" / \\\"batteries\\\" @ git \\\"v4.30.0-rc2\\\"\","
             "     \"require batteries from \\\"/build/packages/batteries\\\"\"),"
-            "    (\"require \\\"leanprover-community\\\" / \\\"Qq\\\" @ git \\\"master\\\"\","
+            "    (\"require \\\"leanprover-community\\\" / \\\"Qq\\\" @ git \\\"v4.30.0-rc2\\\"\","
             "     \"require Qq from \\\"/build/packages/Qq\\\"\"),"
-            "    (\"require \\\"leanprover-community\\\" / \\\"aesop\\\" @ git \\\"master\\\"\","
+            "    (\"require \\\"leanprover-community\\\" / \\\"aesop\\\" @ git \\\"v4.30.0-rc2\\\"\","
             "     \"require aesop from \\\"/build/packages/aesop\\\"\"),"
-            "    (\"require \\\"leanprover-community\\\" / \\\"proofwidgets\\\" @ git \\\"v0.0.86\\\"\","
+            "    (\"require \\\"leanprover-community\\\" / \\\"proofwidgets\\\" @ git \\\"v0.0.98\\\"\","
             "     \"require proofwidgets from \\\"/build/packages/proofwidgets\\\"\"),"
             "    (\"require \\\"leanprover-community\\\" / \\\"importGraph\\\" @ git \\\"main\\\"\","
             "     \"require importGraph from \\\"/build/packages/importGraph\\\"\"),"
@@ -571,14 +577,14 @@
             "# Rewrite Aesop lakefile.toml (convert batteries to path)"
             "strict_replace("
             "    \"/build/packages/aesop/lakefile.toml\","
-            "    '[[require]]\\nname = \"batteries\"\\ngit = \"https://github.com/leanprover-community/batteries\"\\nrev = \"v4.28.0-rc1\"',"
+            "    '[[require]]\\nname = \"batteries\"\\nscope = \"leanprover-community\"\\nrev = \"v4.30.0-rc2\"',"
             "    '[[require]]\\nname = \"batteries\"\\npath = \"/build/packages/batteries\"'"
             ")"
             ""
             "# Rewrite ImportGraph lakefile.toml (convert Cli to path)"
             "strict_replace("
             "    \"/build/packages/importGraph/lakefile.toml\","
-            "    '[[require]]\\nname = \"Cli\"\\nscope = \"leanprover\"\\nrev = \"v4.28.0-rc1\"',"
+            "    '[[require]]\\nname = \"Cli\"\\nscope = \"leanprover\"\\nrev = \"v4.30.0-rc2\"',"
             "    '[[require]]\\nname = \"Cli\"\\npath = \"/build/packages/Cli\"'"
             ")"
             ""
@@ -794,14 +800,14 @@
         };
 
         packages.rust-toolchain = fetchRustToolchain {
-          rustDate = "2026-02-07";
-          sha256 = "sha256-kd/N4h5ht1tmFi3/7V4PuZgNELMYP4rZQ1dLPIx9iI0=";
+          rustDate = "2026-05-31";
+          sha256 = "sha256-tdLBvDewiNTUKOdMJ1pkU7mPrUY0xTFOZWdG9dDNiAk=";
         };
 
         # A static, standalone Lean toolchain package for direct local consumption
         packages.lean-toolchain = fetchLeanToolchain {
-          leanVersion = "v4.28.0-rc1";
-          sha256 = "sha256-+LuElSu93jwUhEobNekiJTMu6COmybE36S626MLcWOs=";
+          leanVersion = "v4.30.0-rc2";
+          sha256 = "sha256-o47cQjSLK5YL8YZ2raaj+mGAvvO+dIDfVeP2L+WoyMs=";
         };
 
         # Import-From-Derivation (IFD) Wiring Layer Package.
