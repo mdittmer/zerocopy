@@ -91,12 +91,12 @@ fn main() -> anyhow::Result<()> {
                 Ok(())
             })?;
         }
-        Commands::Setup(resolve::SetupArgs {}) => {
-            setup::run_setup()?;
+        Commands::Setup(args) => {
+            setup::run_setup(setup::SetupArgs { local_archive: args.local_archive })?;
         }
         Commands::ToolchainPath => {
             let toolchain = setup::Toolchain::resolve()?;
-            println!("{}", toolchain.root.display());
+            println!("{}", toolchain.bin_dir().display());
         }
         Commands::Expand(expand_args) => {
             prepare_and_run(&expand_args.resolve_args, |locked_roots, packages| {

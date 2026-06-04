@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "tools/doc_gen"]
+members = [".", "exocrate", "tools/doc_gen"]
 
 [package]
 name = "cargo-anneal"
@@ -20,6 +20,22 @@ repository = "https://github.com/google/zerocopy/tree/main/anneal"
 publish = true
 
 exclude = [".*", "testdata"]
+
+[package.metadata.exocrate.linux.x86_64]
+sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+url = "https://example.com/linux-x86_64.tar.zst"
+
+[package.metadata.exocrate.macos.x86_64]
+sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+url = "https://example.com/macos-x86_64.tar.zst"
+
+[package.metadata.exocrate.linux.aarch64]
+sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+url = "https://example.com/linux-aarch64.tar.zst"
+
+[package.metadata.exocrate.macos.aarch64]
+sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+url = "https://example.com/macos-aarch64.tar.zst"
 
 [dependencies]
 anyhow = "1.0.102"
@@ -46,16 +62,14 @@ thiserror = "2.0.18"
 walkdir = "2.5.0"
 indicatif = { version = "0.18.4", features = ["improved_unicode"] }
 console = "0.16.3"
+exocrate = { path = "./exocrate" }
 sha2 = "0.10"
 fs2 = "0.4"
 toml = "0.8"
-reqwest = { version = "0.12", features = ["blocking", "rustls-tls"] }
-dirs = "6.0"
 tempfile = "3.27.0"
-tar = "0.4"
-flate2 = "1.1"
 
 [build-dependencies]
+sha2 = "0.10"
 toml = "0.8"
 
 [dev-dependencies]
