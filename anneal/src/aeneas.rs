@@ -11,15 +11,18 @@
 //    back to Rust.
 
 use std::{
+    ffi::OsString,
     fmt::Write,
     fs,
     io::{BufRead, BufReader},
+    path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, Mutex},
 };
 
 use anyhow::{Context, Result, bail};
 use indicatif::{ProgressBar, ProgressStyle};
+use walkdir::WalkDir;
 
 use crate::{generate, resolve::LockedRoots, scanner::AnnealArtifact, setup::Tool};
 
@@ -269,7 +272,7 @@ pub fn run_aeneas(
     //
     // Aeneas and its Lean dependencies are unpacked from the managed archive.
     let toolchain = crate::setup::Toolchain::resolve()?;
-    let path = toolchain.aeneas_lean_dir();
+    let path = materialize_aeneas_dependency(&tmp_lean_root, &lean_root, &toolchain)?;
     let aeneas_dep = format!(
         r#"-- Aeneas rev: {}
 require aeneas from "{}""#,
@@ -332,6 +335,104 @@ lean_lib «User» where
     fs::rename(&tmp_lean_root, &lean_root)
         .context("Failed to rename temporary lean directory to target")?;
 
+    Ok(())
+}
+
+fn materialize_aeneas_dependency(
+    tmp_lean_root: &Path,
+    lean_root: &Path,
+    toolchain: &crate::setup::Toolchain,
+) -> Result<PathBuf> {
+    let vendor_root = tmp_lean_root.join("vendor").join("aeneas");
+    let lean_dst = vendor_root.join("backends").join("lean");
+    let packages_dst = vendor_root.join("packages");
+
+    println!("Materializing packages by copying from toolchain...");
+    copy_tree_writable(&toolchain.aeneas_lean_dir(), &lean_dst)
+        .context("Failed to copy Aeneas Lean package from toolchain")?;
+    copy_tree_writable(&toolchain.aeneas_root().join("packages"), &packages_dst)
+        .context("Failed to copy Aeneas Lean dependencies from toolchain")?;
+
+    Ok(lean_root.join("vendor").join("aeneas").join("backends").join("lean"))
+}
+
+fn copy_tree_writable(src: &Path, dst: &Path) -> Result<()> {
+    if dst.exists() {
+        fs::remove_dir_all(dst)
+            .with_context(|| format!("Failed to remove stale directory {}", dst.display()))?;
+    }
+
+    for entry in WalkDir::new(src) {
+        let entry = entry.with_context(|| format!("Failed to walk {}", src.display()))?;
+        let path = entry.path();
+        let rel = path.strip_prefix(src).with_context(|| {
+            format!("Failed to relativize {} against {}", path.display(), src.display())
+        })?;
+        let target = dst.join(rel);
+
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target)
+                .with_context(|| format!("Failed to create directory {}", target.display()))?;
+        } else if entry.file_type().is_symlink() {
+            let link = fs::read_link(path)
+                .with_context(|| format!("Failed to read symlink {}", path.display()))?;
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create parent directory {}", parent.display())
+                })?;
+            }
+            create_symlink(&link, &target)
+                .with_context(|| format!("Failed to copy symlink {}", target.display()))?;
+        } else if entry.file_type().is_file() {
+            if let Some(parent) = target.parent() {
+                fs::create_dir_all(parent).with_context(|| {
+                    format!("Failed to create parent directory {}", parent.display())
+                })?;
+            }
+            fs::copy(path, &target).with_context(|| {
+                format!("Failed to copy {} to {}", path.display(), target.display())
+            })?;
+            make_writable(&target)?;
+        }
+    }
+
+    for entry in WalkDir::new(dst).contents_first(true) {
+        let entry = entry.with_context(|| format!("Failed to walk {}", dst.display()))?;
+        if !entry.file_type().is_symlink() {
+            make_writable(entry.path())?;
+        }
+    }
+
+    Ok(())
+}
+
+#[cfg(unix)]
+fn create_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(src, dst)
+}
+
+#[cfg(windows)]
+fn create_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
+    if src.is_dir() {
+        std::os::windows::fs::symlink_dir(src, dst)
+    } else {
+        std::os::windows::fs::symlink_file(src, dst)
+    }
+}
+
+fn make_writable(path: &Path) -> Result<()> {
+    let metadata =
+        fs::symlink_metadata(path).with_context(|| format!("Failed to stat {}", path.display()))?;
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    let mut perms = metadata.permissions();
+    if perms.readonly() {
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        fs::set_permissions(path, perms)
+            .with_context(|| format!("Failed to make {} writable", path.display()))?;
+    }
     Ok(())
 }
 
@@ -398,9 +499,10 @@ fn run_lake(roots: &LockedRoots, artifacts: &[AnnealArtifact]) -> Result<()> {
 
     // 2. Build the project (dependencies only)
     let toolchain = crate::setup::Toolchain::resolve()?;
-    let mut cmd = toolchain.command(Tool::Lake);
-    cmd.args(["build", "Generated", "Anneal"]);
+    let mut cmd = std::process::Command::new(toolchain.lean_bin().join("lake"));
+    cmd.args(["--keep-toolchain", "build", "Generated", "Anneal"]);
     cmd.current_dir(lean_root);
+    configure_lake_command(&mut cmd, &toolchain)?;
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
 
@@ -474,9 +576,10 @@ fn run_lake(roots: &LockedRoots, artifacts: &[AnnealArtifact]) -> Result<()> {
         let specs_rel_path = format!("generated/{}/{}", slug, artifact.lean_spec_file_name());
 
         let toolchain = crate::setup::Toolchain::resolve()?;
-        let mut cmd = toolchain.command(Tool::Lake);
-        cmd.args(["env", "lean", "--json", &specs_rel_path]);
+        let mut cmd = std::process::Command::new(toolchain.lean_bin().join("lake"));
+        cmd.args(["--keep-toolchain", "env", "lean", "--json", &specs_rel_path]);
         cmd.current_dir(lean_root);
+        configure_lake_command(&mut cmd, &toolchain)?;
         cmd.stdout(Stdio::piped());
         cmd.stderr(Stdio::piped());
 
@@ -582,6 +685,35 @@ fn run_lake(roots: &LockedRoots, artifacts: &[AnnealArtifact]) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn configure_lake_command(
+    cmd: &mut std::process::Command,
+    toolchain: &crate::setup::Toolchain,
+) -> Result<()> {
+    cmd.env("LEAN_SYSROOT", toolchain.lean_sysroot());
+    cmd.env("MATHLIB_NO_CACHE_ON_UPDATE", "1");
+    cmd.env("PATH", prepend_paths_to_env_var("PATH", &[toolchain.lean_bin()])?);
+
+    let lib_env_var =
+        if cfg!(target_os = "macos") { "DYLD_LIBRARY_PATH" } else { "LD_LIBRARY_PATH" };
+    cmd.env(
+        lib_env_var,
+        prepend_paths_to_env_var(
+            lib_env_var,
+            &[toolchain.lean_sysroot().join("lib"), toolchain.lean_sysroot().join("lib/lean")],
+        )?,
+    );
+
+    Ok(())
+}
+
+fn prepend_paths_to_env_var(var_name: &str, new_paths: &[PathBuf]) -> Result<OsString> {
+    let mut paths = new_paths.to_vec();
+    if let Some(existing) = std::env::var_os(var_name) {
+        paths.extend(std::env::split_paths(&existing));
+    }
+    std::env::join_paths(paths).with_context(|| format!("Failed to prepend paths to {var_name}"))
 }
 
 /// Resolves a Lean diagnostic to a Rust source location.

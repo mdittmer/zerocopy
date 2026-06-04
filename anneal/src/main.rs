@@ -87,7 +87,11 @@ fn main() -> anyhow::Result<()> {
                 println!();
                 println!("To manually build and experiment:");
                 println!("  1. cd {}", lean_root.display());
-                println!("  2. LAKE_CACHE_DIR={} lake build", toolchain.cache_dir().display());
+                println!(
+                    "  2. LAKE_CACHE_DIR={} {} --keep-toolchain build",
+                    toolchain.cache_dir().display(),
+                    toolchain.lean_bin().join("lake").display()
+                );
                 Ok(())
             })?;
         }

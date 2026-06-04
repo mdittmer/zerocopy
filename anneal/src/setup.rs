@@ -1,12 +1,8 @@
 //! Subcommand for installing Anneal dependencies.
 
-use std::{
-    path::{Path, PathBuf},
-    process::Command,
-};
+use std::{path::PathBuf, process::Command};
 
 use anyhow::Context as _;
-use walkdir::WalkDir;
 
 pub struct SetupArgs {
     pub local_archive: Option<PathBuf>,
@@ -23,7 +19,6 @@ pub enum Tool {
     #[allow(dead_code)]
     CharonDriver,
     Aeneas,
-    Lake,
 }
 
 impl Tool {
@@ -32,7 +27,6 @@ impl Tool {
             Self::Charon => "charon",
             Self::CharonDriver => "charon-driver",
             Self::Aeneas => "aeneas",
-            Self::Lake => "lake",
         }
     }
 
@@ -41,7 +35,6 @@ impl Tool {
             Self::Charon | Self::CharonDriver | Self::Aeneas => {
                 toolchain.aeneas_bin_dir().join(self.name())
             }
-            Self::Lake => toolchain.lean_bin().join(self.name()),
         }
     }
 }
@@ -53,7 +46,6 @@ const BIN_DIR: &str = "bin";
 const LIB_DIR: &str = "lib";
 const LEAN_SYSROOT: &str = "lean";
 const RUST_SYSROOT: &str = "rust";
-const PLACEHOLDER_ROOT: &str = "/ANNEAL_PLACEHOLDER_ROOT";
 
 pub struct Toolchain {
     pub root: PathBuf,
@@ -126,7 +118,7 @@ pub fn run_setup(args: SetupArgs) -> anyhow::Result<()> {
     };
 
     let installation_dir = CONFIG
-        .resolve_installation_dir_or_install_with_fixup(location(), source, fixup_toolchain_install)
+        .resolve_installation_dir_or_install(location(), source)
         .context("failed to resolve-or-install dependencies")?;
     log::info!("anneal toolchain is installed at {:?}", installation_dir);
     Ok(())
@@ -196,51 +188,6 @@ fn decode_nibble(c: u8) -> Option<u8> {
     }
 }
 
-fn fixup_toolchain_install(root: &Path) -> std::io::Result<()> {
-    set_readonly_recursive(root, false)?;
-    rewrite_trace_placeholders(root)?;
-    set_readonly_recursive(root, true)
-}
-
-fn rewrite_trace_placeholders(root: &Path) -> std::io::Result<()> {
-    let replacement = root.to_string_lossy();
-    for entry in WalkDir::new(root) {
-        let entry = entry.map_err(std::io::Error::other)?;
-        let path = entry.path();
-        if path.extension().is_some_and(|ext| ext == "trace") {
-            let content = std::fs::read_to_string(path)?;
-            if content.contains(PLACEHOLDER_ROOT) {
-                std::fs::write(path, content.replace(PLACEHOLDER_ROOT, replacement.as_ref()))?;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn set_readonly_recursive(root: &Path, readonly: bool) -> std::io::Result<()> {
-    let mut paths = WalkDir::new(root)
-        .into_iter()
-        .map(|entry| entry.map(|entry| entry.into_path()).map_err(std::io::Error::other))
-        .collect::<std::io::Result<Vec<_>>>()?;
-
-    if readonly {
-        paths.reverse();
-    }
-
-    for path in paths {
-        let metadata = std::fs::symlink_metadata(&path)?;
-        if metadata.file_type().is_symlink() {
-            continue;
-        }
-        let mut perms = metadata.permissions();
-        #[allow(clippy::permissions_set_readonly_false)]
-        perms.set_readonly(readonly);
-        std::fs::set_permissions(path, perms)?;
-    }
-
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,23 +209,5 @@ mod tests {
             Tool::Aeneas.path(&toolchain),
             PathBuf::from("/tmp/toolchain/aeneas/bin/aeneas")
         );
-        assert_eq!(Tool::Lake.path(&toolchain), PathBuf::from("/tmp/toolchain/lean/bin/lake"));
-    }
-
-    #[test]
-    fn fixup_rewrites_trace_placeholders() {
-        let temp = tempfile::tempdir().unwrap();
-        let trace_dir = temp.path().join("aeneas/backends/lean/.lake/build/lib/lean");
-        std::fs::create_dir_all(&trace_dir).unwrap();
-        let trace = trace_dir.join("Aeneas.trace");
-        std::fs::write(&trace, format!("{PLACEHOLDER_ROOT}/aeneas/backends/lean/Aeneas.lean"))
-            .unwrap();
-
-        fixup_toolchain_install(temp.path()).unwrap();
-
-        let content = std::fs::read_to_string(&trace).unwrap();
-        assert!(content.contains(temp.path().to_string_lossy().as_ref()));
-        assert!(!content.contains(PLACEHOLDER_ROOT));
-        assert!(std::fs::metadata(&trace).unwrap().permissions().readonly());
     }
 }

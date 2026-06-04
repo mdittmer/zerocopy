@@ -103,7 +103,7 @@ aeneas_rev = "42c0e90dacf486f7d3ed5b6cde3a9a81f04915a4"
 
 # The Lean toolchain version to use. This must match the version of Lean used
 # by Aeneas in the `lean-toolchain` file in the commit above.
-lean_toolchain = "leanprover/lean4:v4.28.0-rc1"
+lean_toolchain = "leanprover/lean4:v4.30.0-rc2"
 
 # The Rust toolchain required by Charon.
 #
