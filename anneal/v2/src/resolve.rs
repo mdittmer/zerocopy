@@ -267,10 +267,10 @@ pub fn resolve_roots(args: &Args, toolchain: &crate::setup::Toolchain) -> anyhow
     // where experimental or local forks of dependencies might be picked up
     // unpredictably, or where Charon might struggle to locate source files
     // outside the standard project structure.
-    check_for_external_deps(&metadata)?;
-
     let selected_packages =
         resolve_packages(&metadata, &args.workspace, args.manifest.manifest_path.as_deref())?;
+
+    check_for_external_deps(&metadata, &selected_packages)?;
 
     let (anneal_global_root, anneal_run_root) = resolve_run_roots(&metadata);
     let mut roots = Roots {
@@ -485,23 +485,31 @@ fn resolve_targets<'a>(
 /// Scans the package graph to ensure all local dependencies are contained
 /// within the workspace root. Returns an error if an external path dependency
 /// is found.
-pub fn check_for_external_deps(metadata: &cargo_metadata::Metadata) -> anyhow::Result<()> {
+pub fn check_for_external_deps(
+    metadata: &cargo_metadata::Metadata,
+    selected_packages: &[&cargo_metadata::Package],
+) -> anyhow::Result<()> {
     log::trace!("check_for_external_deps");
     // Canonicalize workspace root to handle symlinks correctly.
     let workspace_root = std::fs::canonicalize(&metadata.workspace_root)
         .context("Failed to canonicalize workspace root")?;
-
+ 
+    let reachable_ids = collect_reachable_packages(metadata, selected_packages)?;
+ 
     for pkg in &metadata.packages {
+        if !reachable_ids.contains(&pkg.id) {
+            continue;
+        }
         // We only care about packages that are "local" (source is None).
         // If source is Some(...), it's from crates.io or git, which is fine
         // (handled by Cargo).
         if pkg.source.is_none() {
             let pkg_path = pkg.manifest_path.as_std_path();
-
+ 
             // Canonicalize the package path for comparison.
             let canonical_pkg_path = std::fs::canonicalize(pkg_path)
                 .with_context(|| format!("Failed to canonicalize path for package {}", pkg.name))?;
-
+ 
             // Check if the package lives outside the workspace tree.
             if !canonical_pkg_path.starts_with(&workspace_root) {
                 anyhow::bail!(
@@ -514,6 +522,34 @@ pub fn check_for_external_deps(metadata: &cargo_metadata::Metadata) -> anyhow::R
             }
         }
     }
-
+ 
     Ok(())
+}
+ 
+fn collect_reachable_packages(
+    metadata: &cargo_metadata::Metadata,
+    selected_packages: &[&cargo_metadata::Package],
+) -> anyhow::Result<std::collections::HashSet<cargo_metadata::PackageId>> {
+    let mut reachable = std::collections::HashSet::new();
+    let resolve = metadata.resolve.as_ref().context("missing resolve graph in metadata")?;
+    let node_map: std::collections::HashMap<_, _> =
+        resolve.nodes.iter().map(|n| (&n.id, n)).collect();
+ 
+    let mut queue = std::collections::VecDeque::new();
+    for pkg in selected_packages {
+        queue.push_back(&pkg.id);
+        reachable.insert(pkg.id.clone());
+    }
+ 
+    while let Some(id) = queue.pop_front() {
+        if let Some(node) = node_map.get(id) {
+            for dep in &node.dependencies {
+                if reachable.insert(dep.clone()) {
+                    queue.push_back(dep);
+                }
+            }
+        }
+    }
+ 
+    Ok(reachable)
 }

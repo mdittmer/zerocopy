@@ -38,6 +38,8 @@ pub fn write_workspace(
         || format!("failed to write `{}`", lean_root.join("lakefile.lean").display()),
     )?;
 
+    write_manifest(toolchain, &lean_root)?;
+
     Ok(lean_root)
 }
 
@@ -45,7 +47,7 @@ fn generated_modules(artifacts: &[crate::aeneas::LeanArtifact]) -> Vec<String> {
     let mut modules = vec!["Generated".to_string()];
     for artifact in artifacts {
         let slug = artifact.artifact.artifact_slug();
-        for stem in ["Funs", "Types", "FunsExternal", "TypesExternal"] {
+        for stem in ["Funs", "Types", "FunsExternal", "TypesExternal", "Specs"] {
             if artifact.output_dir.join(format!("{stem}.lean")).exists() {
                 modules.push(format!("{slug}.{stem}"));
             }
@@ -85,6 +87,53 @@ lean_lib Generated where
 
 fn lean_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a string cannot fail")
+}
+
+fn write_manifest(
+    toolchain: &crate::setup::Toolchain,
+    lean_root: &std::path::Path,
+) -> anyhow::Result<()> {
+    let aeneas_dir = toolchain.aeneas_lean_dir();
+    let packages_dir = toolchain.aeneas_packages_dir();
+
+    let mut packages = vec![
+        serde_json::json!({
+            "type": "path",
+            "name": "aeneas",
+            "dir": aeneas_dir.to_string_lossy(),
+            "inherited": false
+        })
+    ];
+
+    if packages_dir.exists() {
+        for entry in std::fs::read_dir(&packages_dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.is_dir() {
+                let name = path.file_name().unwrap().to_string_lossy().into_owned();
+                packages.push(serde_json::json!({
+                    "type": "path",
+                    "name": name,
+                    "dir": path.to_string_lossy(),
+                    "inherited": true
+                }));
+            }
+        }
+    }
+
+    let manifest = serde_json::json!({
+        "version": "1.2.0",
+        "packagesDir": ".lake/packages",
+        "packages": packages,
+        "name": "anneal_verification",
+        "lakeDir": ".lake",
+        "fixedToolchain": false
+    });
+
+    let manifest_path = lean_root.join("lake-manifest.json");
+    let file = std::fs::File::create(&manifest_path)?;
+    serde_json::to_writer_pretty(file, &manifest)?;
+    Ok(())
 }
 
 #[cfg(test)]

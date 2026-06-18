@@ -14,6 +14,7 @@ mod aeneas;
 mod annotations;
 mod charon;
 mod diagnostics;
+mod generator;
 mod lean;
 mod resolve;
 mod scanner;
@@ -90,8 +91,30 @@ fn expand(args: ExpandArgs) -> anyhow::Result<()> {
 }
 
 fn generate(args: ExpandArgs) -> anyhow::Result<()> {
-    compile_and_extract(args, |toolchain, locked_roots, packages, _| {
+    compile_and_extract(args, |toolchain, locked_roots, packages, annotated_artifacts| {
         let lean_artifacts = crate::aeneas::run_aeneas(toolchain, locked_roots, packages)?;
+
+        for annotated in annotated_artifacts {
+            if annotated.items.is_empty() {
+                continue;
+            }
+            let slug = annotated.artifact.artifact_slug();
+            let output_dir = locked_roots.lean_generated_root().join(&slug);
+            let specs_path = output_dir.join("Specs.lean");
+
+            let llbc_path = annotated.artifact.llbc_path(locked_roots);
+            let file = std::fs::File::open(&llbc_path)
+                .with_context(|| format!("failed to open LLBC at {}", llbc_path.display()))?;
+            let crate_data: charon_lib::export::CrateData = serde_json::from_reader(file)
+                .with_context(|| format!("failed to parse LLBC at {}", llbc_path.display()))?;
+
+            let generated = crate::generator::generate_artifact(annotated, &crate_data)
+                .context("failed to generate specs")?;
+            std::fs::write(&specs_path, generated.code)
+                .with_context(|| format!("failed to write specs to {}", specs_path.display()))?;
+            log::info!("Generated specs for {} at {}", slug, specs_path.display());
+        }
+
         let lean_root = crate::lean::write_workspace(toolchain, locked_roots, &lean_artifacts)?;
         for artifact in &lean_artifacts {
             log::debug!(

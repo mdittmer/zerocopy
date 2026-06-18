@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "anneal-annotations"]
+members = [".", "anneal-annotations", "scratch/test_impl"]
 
 [features]
 # Enables tests that assume a prebuilt exocrate archive.

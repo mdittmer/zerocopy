@@ -97,6 +97,10 @@ impl Toolchain {
     pub fn aeneas_lean_dir(&self) -> std::path::PathBuf {
         AENEAS_LEAN_DIR.iter().fold(self.root.join(AENEAS_DIR), |path, segment| path.join(segment))
     }
+ 
+    pub fn aeneas_packages_dir(&self) -> std::path::PathBuf {
+        self.root.join(AENEAS_DIR).join("packages")
+    }
 
     pub fn lean_root(&self) -> std::path::PathBuf {
         self.root.join(LEAN_DIR)
