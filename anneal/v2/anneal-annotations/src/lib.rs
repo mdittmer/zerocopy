@@ -249,6 +249,13 @@ fn expand_item(
     sections: Vec<Section>,
     item: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
+    if let Err(err) = validate_item(kind, item.clone()) {
+        let compile_error = err.to_compile_error();
+        return quote! {
+            #compile_error
+            #item
+        };
+    }
     let argument_names = match argument_names_for_item(kind, item.clone()) {
         Ok(argument_names) => argument_names,
         Err(err) => {
@@ -269,6 +276,19 @@ fn expand_item(
         #[doc = #metadata]
         #item
     }
+}
+
+fn validate_item(kind: AnnotationKind, item: proc_macro2::TokenStream) -> syn::Result<()> {
+    if matches!(kind, AnnotationKind::TraitInvariant)
+        && let Ok(item_trait) = syn::parse2::<syn::ItemTrait>(item)
+        && item_trait.unsafety.is_none()
+    {
+        return Err(syn::Error::new_spanned(
+            item_trait.trait_token,
+            "`#[anneal::trait_invariant]` is only valid on unsafe traits",
+        ));
+    }
+    Ok(())
 }
 
 fn argument_names_for_item(
@@ -418,6 +438,48 @@ mod tests {
         assert!(text.contains("aeneas :: opaque"));
         assert!(text.contains("anneal:v2:"));
         assert!(text.contains("pub unsafe fn read"));
+    }
+
+    #[test]
+    fn trait_invariant_accepts_unsafe_traits() {
+        let expanded = expand_item(
+            AnnotationKind::TraitInvariant,
+            parse(
+                AnnotationKind::TraitInvariant,
+                quote! {
+                    is_safe = "True"
+                },
+            ),
+            quote! {
+                pub unsafe trait SafeTrait {}
+            },
+        );
+        let text = expanded.to_string();
+
+        assert!(!text.contains("compile_error"));
+        assert!(text.contains("anneal:v2:"));
+        assert!(text.contains("pub unsafe trait SafeTrait"));
+    }
+
+    #[test]
+    fn trait_invariant_rejects_safe_traits() {
+        let expanded = expand_item(
+            AnnotationKind::TraitInvariant,
+            parse(
+                AnnotationKind::TraitInvariant,
+                quote! {
+                    is_safe = "True"
+                },
+            ),
+            quote! {
+                pub trait SafeTrait {}
+            },
+        );
+        let text = expanded.to_string();
+
+        assert!(text.contains("compile_error"));
+        assert!(text.contains("only valid on unsafe traits"));
+        assert!(text.contains("pub trait SafeTrait"));
     }
 
     #[test]
