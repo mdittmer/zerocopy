@@ -7,8 +7,8 @@ use anyhow::Context as _;
 use std::collections::HashMap;
 
 use charon_lib::ast::{
-    Body, FunDecl, FunDeclId, GenericParams, Local, RefKind, TraitDeclId, Ty, TyKind, TypeDeclId,
-    TypeId,
+    Body, FunDecl, FunDeclId, GenericParams, Local, RefKind, TraitDeclId, TraitDeclRef, Ty, TyKind,
+    TypeDeclId, TypeId,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -238,10 +238,17 @@ fn function_args(
 struct LeanGenerics {
     type_params: Vec<String>,
     const_params: Vec<LeanConstGeneric>,
+    trait_dicts: Vec<LeanTraitDict>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LeanConstGeneric {
+    name: String,
+    lean_type: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LeanTraitDict {
     name: String,
     lean_type: String,
 }
@@ -251,7 +258,7 @@ fn lean_generics(
     params: &GenericParams,
     path: &str,
 ) -> Result<LeanGenerics, Error> {
-    if !params.trait_clauses.is_empty() || !params.trait_type_constraints.is_empty() {
+    if !params.trait_type_constraints.is_empty() {
         return Err(Error::UnsupportedGenerics { path: path.to_string() });
     }
     Ok(LeanGenerics {
@@ -272,7 +279,57 @@ fn lean_generics(
                 })
             })
             .collect::<Result<Vec<_>, Error>>()?,
+        trait_dicts: lean_trait_dicts(krate, params, path)?,
     })
+}
+
+fn lean_trait_dicts(
+    krate: &charon_lib::ast::TranslatedCrate,
+    params: &GenericParams,
+    path: &str,
+) -> Result<Vec<LeanTraitDict>, Error> {
+    let mut used_names = HashMap::<String, ()>::new();
+    params
+        .trait_clauses
+        .iter()
+        .map(|clause| {
+            if !clause.trait_.regions.is_empty() {
+                return Err(Error::UnsupportedGenerics { path: path.to_string() });
+            }
+            let trait_ref = &clause.trait_.skip_binder;
+            if !trait_ref.generics.trait_refs.is_empty() {
+                return Err(Error::UnsupportedGenerics { path: path.to_string() });
+            }
+            let trait_decl = krate
+                .trait_decls
+                .get(trait_ref.id)
+                .ok_or(Error::MissingDecl { kind: "trait", index: trait_ref.id.index() })?;
+            let trait_path = crate::names::item_path(krate, &trait_decl.item_meta.name)?;
+            let name = format!("{}Inst", trait_path.item);
+            if used_names.insert(name.clone(), ()).is_some() {
+                return Err(Error::UnsupportedGenerics { path: path.to_string() });
+            }
+            Ok(LeanTraitDict {
+                name,
+                lean_type: trait_dict_type(krate, params, &trait_path, trait_ref)?,
+            })
+        })
+        .collect()
+}
+
+fn trait_dict_type(
+    krate: &charon_lib::ast::TranslatedCrate,
+    params: &GenericParams,
+    path: &crate::names::LeanItemPath,
+    trait_ref: &TraitDeclRef,
+) -> Result<String, Error> {
+    let mut parts = vec![path.item.clone()];
+    parts.extend(crate::lean_types::render_generic_args_with_generics(
+        krate,
+        params,
+        &trait_ref.generics,
+    )?);
+    Ok(parts.join(" "))
 }
 
 fn lean_trait_generics(
@@ -407,8 +464,8 @@ fn render_function_theorem(kind: &str, spec: &FunctionSpec<'_>, out: &mut String
     push_arg_binders(out, &spec.args);
     if function_has_pre(spec) {
         out.push_str(" (h_req : Pre");
-        for arg in &spec.args {
-            out.push_str(&format!(" {}", arg.name));
+        for arg in function_context_arg_names(spec) {
+            out.push_str(&format!(" {arg}"));
         }
         out.push(')');
     }
@@ -421,8 +478,8 @@ fn render_function_theorem(kind: &str, spec: &FunctionSpec<'_>, out: &mut String
         out.push(' ');
     }
     out.push_str("Post");
-    for arg in &spec.args {
-        out.push_str(&format!(" {}", arg.name));
+    for arg in function_context_arg_names(spec) {
+        out.push_str(&format!(" {arg}"));
     }
     if spec.return_type.is_some() {
         out.push_str(if spec.mut_args().next().is_some() { " ret" } else { " ret_" });
@@ -491,6 +548,15 @@ fn push_arg_binders(out: &mut String, args: &[FunctionArg]) {
     }
 }
 
+fn function_context_arg_names(spec: &FunctionSpec<'_>) -> Vec<String> {
+    spec.generics
+        .trait_dicts
+        .iter()
+        .map(|dict| dict.name.clone())
+        .chain(spec.args.iter().map(|arg| arg.name.clone()))
+        .collect()
+}
+
 fn function_call(spec: &FunctionSpec<'_>) -> String {
     let mut parts = vec![spec.path.item.clone()];
     parts.extend(spec.generics.type_params.iter().map(|param| format!("({param} := {param})")));
@@ -500,6 +566,7 @@ fn function_call(spec: &FunctionSpec<'_>) -> String {
             .iter()
             .map(|param| format!("({} := {})", param.name, param.name)),
     );
+    parts.extend(spec.generics.trait_dicts.iter().map(|dict| dict.name.clone()));
     parts.extend(spec.args.iter().map(|arg| arg.name.clone()));
     parts.join(" ")
 }
@@ -510,6 +577,9 @@ fn push_generic_binders(out: &mut String, generics: &LeanGenerics) {
     }
     for param in &generics.const_params {
         out.push_str(&format!(" {{{} : {}}}", param.name, param.lean_type));
+    }
+    for dict in &generics.trait_dicts {
+        out.push_str(&format!(" ({} : {})", dict.name, dict.lean_type));
     }
 }
 
@@ -859,8 +929,11 @@ mod tests {
     fn renders_type_parameter_binders_and_applications() {
         let type_body =
             TypeInvariantAnnotation { context: Vec::new(), is_valid: vec![fragment("True")] };
-        let generics =
-            LeanGenerics { type_params: vec!["T".to_string()], const_params: Vec::new() };
+        let generics = LeanGenerics {
+            type_params: vec!["T".to_string()],
+            const_params: Vec::new(),
+            trait_dicts: Vec::new(),
+        };
         let mut out = String::new();
 
         render_type_invariant(&path("Wrapper"), &generics, &type_body, &mut out);
@@ -881,6 +954,7 @@ mod tests {
                 name: "N".to_string(),
                 lean_type: "Std.Usize".to_string(),
             }],
+            trait_dicts: Vec::new(),
         };
         render_type_invariant(&path("ConstWrapper"), &const_generics, &type_body, &mut out);
         render_trait_invariant(&path("ConstSafeTrait"), &const_generics, &trait_body, &mut out);
@@ -921,5 +995,52 @@ mod tests {
             out.contains("Aeneas.Std.WP.spec (generic_id (T := T) x) (fun ret_ => Post x ret_)")
         );
         assert!(out.contains("        result := by\n          simp_all [generic_id]\n"));
+    }
+
+    #[test]
+    fn renders_trait_dictionary_binders_and_applications() {
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::Spec,
+            context: Vec::new(),
+            requires: Vec::new(),
+            ensures: vec![named_fragment("result", "ret = x")],
+            proof_context: Vec::new(),
+            proofs: vec![named_fragment("result", "simp_all [bound_id]")],
+        };
+        let spec = FunctionSpec {
+            path: path("bound_id"),
+            generics: LeanGenerics {
+                type_params: vec!["T".to_string(), "U".to_string()],
+                const_params: Vec::new(),
+                trait_dicts: vec![LeanTraitDict {
+                    name: "SafeTraitInst".to_string(),
+                    lean_type: "SafeTrait T U".to_string(),
+                }],
+            },
+            args: vec![FunctionArg {
+                name: "x".to_string(),
+                lean_type: "T".to_string(),
+                is_mut_ref: false,
+            }],
+            return_type: Some("T".to_string()),
+            annotation: &annotation,
+        };
+        let mut out = String::new();
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains(
+            "structure Pre {T : Type} {U : Type} (SafeTraitInst : SafeTrait T U) (x : T) : Prop where\n"
+        ));
+        assert!(out.contains(
+            "structure Post {T : Type} {U : Type} (SafeTraitInst : SafeTrait T U) (x : T) (ret : T) : Prop where\n"
+        ));
+        assert!(out.contains(
+            "theorem spec {T : Type} {U : Type} (SafeTraitInst : SafeTrait T U) (x : T) (h_req : Pre SafeTraitInst x) :\n"
+        ));
+        assert!(out.contains(
+            "Aeneas.Std.WP.spec (bound_id (T := T) (U := U) SafeTraitInst x) (fun ret_ => Post SafeTraitInst x ret_)"
+        ));
+        assert!(out.contains("        result := by\n          simp_all [bound_id]\n"));
     }
 }

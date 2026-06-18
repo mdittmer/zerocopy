@@ -32,6 +32,14 @@ pub fn render_type_with_generics(
     render_type_with_ctx(krate, &TypeContext { generics: Some(generics) }, ty)
 }
 
+pub fn render_generic_args_with_generics(
+    krate: &TranslatedCrate,
+    generics: &GenericParams,
+    args: &GenericArgs,
+) -> Result<Vec<String>, Error> {
+    render_generic_args(krate, &TypeContext { generics: Some(generics) }, args)
+}
+
 #[derive(Default)]
 struct TypeContext<'a> {
     generics: Option<&'a GenericParams>,
