@@ -800,6 +800,17 @@ mod tests {
         }
     }
 
+    fn nested_path(relative_namespace: &[&str], item: &str) -> crate::names::LeanItemPath {
+        crate::names::LeanItemPath {
+            crate_namespace: "test_impl".to_string(),
+            relative_namespace: relative_namespace
+                .iter()
+                .map(|segment| segment.to_string())
+                .collect(),
+            item: item.to_string(),
+        }
+    }
+
     fn fragment(lean: &str) -> LeanFragment {
         LeanFragment { name: None, lean: lean.to_string() }
     }
@@ -1042,5 +1053,71 @@ mod tests {
             "Aeneas.Std.WP.spec (bound_id (T := T) (U := U) SafeTraitInst x) (fun ret_ => Post SafeTraitInst x ret_)"
         ));
         assert!(out.contains("        result := by\n          simp_all [bound_id]\n"));
+    }
+
+    #[test]
+    fn renders_inherent_method_namespaces_and_calls() {
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::Spec,
+            context: Vec::new(),
+            requires: Vec::new(),
+            ensures: vec![named_fragment("result", "ret = self.val")],
+            proof_context: Vec::new(),
+            proofs: vec![named_fragment("result", "simp_all [Positive.get]")],
+        };
+        let spec = FunctionSpec {
+            path: nested_path(&["Positive"], "get"),
+            generics: LeanGenerics::default(),
+            args: vec![FunctionArg {
+                name: "self".to_string(),
+                lean_type: "Positive".to_string(),
+                is_mut_ref: false,
+            }],
+            return_type: Some("Std.U32".to_string()),
+            annotation: &annotation,
+        };
+        let mut out = String::new();
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains("namespace Positive\n\nnamespace get\n\n"));
+        assert!(out.contains("verify_user_bound result _root_.test_impl.Positive.get\n"));
+        assert!(out.contains("Aeneas.Std.WP.spec (get self) (fun ret_ => Post self ret_)"));
+        assert!(out.contains("\nend get\n\nend Positive\n"));
+    }
+
+    #[test]
+    fn renders_mutable_reference_post_state() {
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::Spec,
+            context: Vec::new(),
+            requires: Vec::new(),
+            ensures: vec![named_fragment("result", "x' = x")],
+            proof_context: Vec::new(),
+            proofs: vec![named_fragment("result", "simp_all [keep_mut]")],
+        };
+        let spec = FunctionSpec {
+            path: path("keep_mut"),
+            generics: LeanGenerics::default(),
+            args: vec![FunctionArg {
+                name: "x".to_string(),
+                lean_type: "Std.U32".to_string(),
+                is_mut_ref: true,
+            }],
+            return_type: None,
+            annotation: &annotation,
+        };
+        let mut out = String::new();
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains("structure Post (x : Std.U32) (x' : Std.U32) : Prop where\n"));
+        assert!(out.contains("theorem spec (x : Std.U32) (h_req : Pre x) :\n"));
+        assert!(out.contains(
+            "Aeneas.Std.WP.spec (keep_mut x) (fun ret_ =>\n    let x' := ret_\n    Post x x')"
+        ));
+        assert!(out.contains("  · rintro x' h_returns\n"));
+        assert!(out.contains("        h_x'_is_valid := by\n"));
+        assert!(out.contains("        result := by\n          simp_all [keep_mut]\n"));
     }
 }
