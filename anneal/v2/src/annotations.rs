@@ -57,7 +57,8 @@ pub enum SectionKind {
     IsSafe,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AnnotationBody {
     Function(FunctionAnnotation),
     TypeInvariant(TypeInvariantAnnotation),
@@ -65,7 +66,7 @@ pub enum AnnotationBody {
     ImplInvariant(ImplInvariantAnnotation),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct FunctionAnnotation {
     pub kind: FunctionAnnotationKind,
     pub context: Vec<LeanFragment>,
@@ -75,30 +76,31 @@ pub struct FunctionAnnotation {
     pub proofs: Vec<LeanFragment>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FunctionAnnotationKind {
     Spec,
     UnsafeAxiom,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TypeInvariantAnnotation {
     pub context: Vec<LeanFragment>,
     pub is_valid: Vec<LeanFragment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct TraitInvariantAnnotation {
     pub context: Vec<LeanFragment>,
     pub is_safe: Vec<LeanFragment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct ImplInvariantAnnotation {
     pub context: Vec<LeanFragment>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct LeanFragment {
     pub name: Option<String>,
     pub lean: String,
@@ -110,7 +112,7 @@ pub struct AnnotatedArtifact {
     pub items: Vec<AnnotatedItem>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct AnnotatedItem {
     pub item_kind: AnnotatedItemKind,
     pub path: Vec<String>,
@@ -118,7 +120,8 @@ pub struct AnnotatedItem {
     pub body: AnnotationBody,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AnnotatedItemKind {
     Function,
     Type,
@@ -219,6 +222,60 @@ pub fn extract_artifact_annotations(
             Ok(AnnotatedArtifact { artifact: artifact.clone(), items })
         })
         .collect()
+}
+
+pub fn write_annotation_manifests(
+    roots: &crate::resolve::LockedRoots<'_>,
+    artifacts: &[AnnotatedArtifact],
+) -> anyhow::Result<Vec<std::path::PathBuf>> {
+    let manifest_root = roots.llbc_root().join("annotations");
+    std::fs::create_dir_all(&manifest_root)
+        .with_context(|| format!("failed to create `{}`", manifest_root.display()))?;
+
+    artifacts
+        .iter()
+        .map(|artifact| {
+            let path = manifest_root.join(format!("{}.annotations.json", artifact.artifact_slug()));
+            let mut json = serde_json::to_string_pretty(&annotation_manifest(artifact))
+                .context("failed to serialize Anneal annotation manifest")?;
+            json.push('\n');
+            std::fs::write(&path, json)
+                .with_context(|| format!("failed to write `{}`", path.display()))?;
+            Ok(path)
+        })
+        .collect()
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AnnotationManifest<'a> {
+    artifact: AnnotationManifestArtifact,
+    items: &'a [AnnotatedItem],
+}
+
+#[derive(Debug, serde::Serialize)]
+struct AnnotationManifestArtifact {
+    package_name: String,
+    target_name: String,
+    target_kind: String,
+    llbc_file: String,
+}
+
+fn annotation_manifest(artifact: &AnnotatedArtifact) -> AnnotationManifest<'_> {
+    AnnotationManifest {
+        artifact: AnnotationManifestArtifact {
+            package_name: artifact.artifact.name.package_name.to_string(),
+            target_name: artifact.artifact.name.target_name.clone(),
+            target_kind: format!("{:?}", artifact.artifact.target_kind),
+            llbc_file: artifact.artifact.llbc_file_name(),
+        },
+        items: &artifact.items,
+    }
+}
+
+impl AnnotatedArtifact {
+    fn artifact_slug(&self) -> String {
+        self.artifact.artifact_slug()
+    }
 }
 
 fn maybe_push_annotation(
@@ -748,5 +805,48 @@ mod tests {
 
         assert_eq!(body.context[0].lean, "open Anneal");
         assert_eq!(body.is_valid[0].lean, "fun self => self.val > 0");
+    }
+
+    #[test]
+    fn manifest_serializes_grouped_annotation_body() {
+        let target_kind = crate::resolve::AnnealTargetKind::Lib;
+        let artifact = crate::scanner::AnnealArtifact {
+            name: crate::resolve::AnnealTargetName {
+                package_name: cargo_metadata::PackageName::new("test_proj".to_string()),
+                target_name: "test_proj".to_string(),
+                kind: target_kind,
+            },
+            target_kind,
+            manifest_path: "/tmp/test_proj/Cargo.toml".into(),
+        };
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::Spec,
+            sections: vec![section(SectionKind::Requires, Some("h_pre"), "x > 0")],
+        };
+        let body = validate_annotation(
+            &annotation,
+            function_facts(true, false),
+            &["test_proj".into(), "f".into()],
+        )
+        .unwrap();
+        let annotated = AnnotatedArtifact {
+            artifact,
+            items: vec![AnnotatedItem {
+                item_kind: AnnotatedItemKind::Function,
+                path: vec!["test_proj".into(), "f".into()],
+                annotation,
+                body,
+            }],
+        };
+
+        let value = serde_json::to_value(annotation_manifest(&annotated)).unwrap();
+
+        assert_eq!(value["artifact"]["package_name"], "test_proj");
+        assert_eq!(value["artifact"]["target_kind"], "Lib");
+        assert!(value["artifact"]["llbc_file"].as_str().unwrap().ends_with(".llbc"));
+        assert_eq!(value["items"][0]["item_kind"], "function");
+        assert_eq!(value["items"][0]["body"]["function"]["requires"][0]["name"], "h_pre");
+        assert_eq!(value["items"][0]["body"]["function"]["requires"][0]["lean"], "x > 0");
     }
 }

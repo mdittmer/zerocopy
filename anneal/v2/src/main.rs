@@ -108,6 +108,8 @@ fn expand(args: ExpandArgs) -> anyhow::Result<()> {
     )?;
     let annotated_artifacts =
         crate::annotations::extract_artifact_annotations(&locked_roots, &packages)?;
+    let annotation_manifests =
+        crate::annotations::write_annotation_manifests(&locked_roots, &annotated_artifacts)?;
     let annotated_items =
         annotated_artifacts.iter().map(|artifact| artifact.items.len()).sum::<usize>();
     for artifact in &annotated_artifacts {
@@ -116,6 +118,9 @@ fn expand(args: ExpandArgs) -> anyhow::Result<()> {
             artifact.items.len(),
             artifact.artifact.llbc_file_name()
         );
+    }
+    for path in &annotation_manifests {
+        log::debug!("Wrote Anneal annotation manifest {}", path.display());
     }
     log::info!(
         "Extracted {annotated_items} Anneal annotation(s) from {} artifact(s)",
