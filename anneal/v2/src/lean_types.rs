@@ -3,14 +3,17 @@
 #![allow(dead_code)]
 
 use charon_lib::ast::{
-    BuiltinTy, ConstantExpr, ConstantExprKind, GenericArgs, ItemId, Literal, LiteralTy, Name,
-    PathElem, RefKind, ScalarValue, TranslatedCrate, Ty, TyKind, TypeDeclId, TypeDeclRef, TypeId,
+    BuiltinTy, ConstantExpr, ConstantExprKind, DeBruijnVar, GenericArgs, GenericParams, ItemId,
+    Literal, LiteralTy, Name, PathElem, RefKind, ScalarValue, TranslatedCrate, Ty, TyKind,
+    TypeDeclId, TypeDeclRef, TypeId, TypeVarId,
 };
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("missing Charon name for type declaration {index}")]
     MissingTypeName { index: usize },
+    #[error("missing type parameter {index} in Lean renderer context")]
+    MissingTypeParam { index: usize },
     #[error("unsupported LLBC type in Lean renderer: {kind}")]
     UnsupportedType { kind: &'static str },
     #[error("unsupported LLBC constant expression in Lean renderer")]
@@ -18,23 +21,46 @@ pub enum Error {
 }
 
 pub fn render_type(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error> {
+    render_type_with_ctx(krate, &TypeContext::default(), ty)
+}
+
+pub fn render_type_with_generics(
+    krate: &TranslatedCrate,
+    generics: &GenericParams,
+    ty: &Ty,
+) -> Result<String, Error> {
+    render_type_with_ctx(krate, &TypeContext { generics: Some(generics) }, ty)
+}
+
+#[derive(Default)]
+struct TypeContext<'a> {
+    generics: Option<&'a GenericParams>,
+}
+
+fn render_type_with_ctx(
+    krate: &TranslatedCrate,
+    ctx: &TypeContext<'_>,
+    ty: &Ty,
+) -> Result<String, Error> {
     match ty.0.inner() {
-        TyKind::Adt(type_ref) => render_type_ref(krate, type_ref),
+        TyKind::Adt(type_ref) => render_type_ref(krate, ctx, type_ref),
         TyKind::Literal(literal) => Ok(render_literal_type(*literal).to_string()),
         TyKind::Never => Ok("Never".to_string()),
-        TyKind::Ref(_, inner, _) => render_type(krate, inner),
+        TyKind::Ref(_, inner, _) => render_type_with_ctx(krate, ctx, inner),
         TyKind::RawPtr(inner, RefKind::Mut) => {
-            Ok(format!("(MutRawPtr {})", render_type(krate, inner)?))
+            Ok(format!("(MutRawPtr {})", render_type_with_ctx(krate, ctx, inner)?))
         }
         TyKind::RawPtr(inner, RefKind::Shared) => {
-            Ok(format!("(ConstRawPtr {})", render_type(krate, inner)?))
+            Ok(format!("(ConstRawPtr {})", render_type_with_ctx(krate, ctx, inner)?))
         }
-        TyKind::Array(inner, len) => {
-            Ok(format!("(Array {} {})", render_type(krate, inner)?, render_const_expr(len)?))
-        }
-        TyKind::Slice(inner) => Ok(format!("(Slice {})", render_type(krate, inner)?)),
-        TyKind::Pattern(inner, _) => render_type(krate, inner),
-        TyKind::TypeVar(_) => Err(Error::UnsupportedType { kind: "type variable" }),
+        TyKind::Array(inner, len) => Ok(format!(
+            "(Array {} {})",
+            render_type_with_ctx(krate, ctx, inner)?,
+            render_const_expr(len)?
+        )),
+        TyKind::Slice(inner) => Ok(format!("(Slice {})", render_type_with_ctx(krate, ctx, inner)?)),
+        TyKind::Pattern(inner, _) => render_type_with_ctx(krate, ctx, inner),
+        TyKind::TypeVar(type_var) => render_type_var(ctx, *type_var),
         TyKind::TraitType(_, _, _) => Err(Error::UnsupportedType { kind: "trait associated type" }),
         TyKind::DynTrait(_) => Err(Error::UnsupportedType { kind: "dyn trait" }),
         TyKind::FnPtr(_) => Err(Error::UnsupportedType { kind: "function pointer" }),
@@ -44,17 +70,22 @@ pub fn render_type(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error> {
     }
 }
 
-fn render_type_ref(krate: &TranslatedCrate, type_ref: &TypeDeclRef) -> Result<String, Error> {
+fn render_type_ref(
+    krate: &TranslatedCrate,
+    ctx: &TypeContext<'_>,
+    type_ref: &TypeDeclRef,
+) -> Result<String, Error> {
     match &type_ref.id {
-        TypeId::Adt(type_id) => render_named_type(krate, *type_id, &type_ref.generics),
-        TypeId::Tuple => render_tuple(krate, &type_ref.generics),
-        TypeId::Builtin(BuiltinTy::Box) => render_type_app(krate, "Box", &type_ref.generics),
+        TypeId::Adt(type_id) => render_named_type(krate, ctx, *type_id, &type_ref.generics),
+        TypeId::Tuple => render_tuple(krate, ctx, &type_ref.generics),
+        TypeId::Builtin(BuiltinTy::Box) => render_type_app(krate, ctx, "Box", &type_ref.generics),
         TypeId::Builtin(BuiltinTy::Str) => Ok("Str".to_string()),
     }
 }
 
 fn render_named_type(
     krate: &TranslatedCrate,
+    ctx: &TypeContext<'_>,
     type_id: TypeDeclId,
     generics: &GenericArgs,
 ) -> Result<String, Error> {
@@ -65,20 +96,25 @@ fn render_named_type(
         .or_else(|| krate.item_names.get(&item_id))
         .ok_or_else(|| Error::MissingTypeName { index: type_id.index() })?;
     let type_name = last_ident_segment(name).ok_or(Error::UnsupportedType { kind: "ADT name" })?;
-    render_type_app(krate, &type_name, generics)
+    render_type_app(krate, ctx, &type_name, generics)
 }
 
 fn render_type_app(
     krate: &TranslatedCrate,
+    ctx: &TypeContext<'_>,
     name: &str,
     generics: &GenericArgs,
 ) -> Result<String, Error> {
-    let args = render_type_args(krate, generics)?;
+    let args = render_type_args(krate, ctx, generics)?;
     if args.is_empty() { Ok(name.to_string()) } else { Ok(format!("({name} {})", args.join(" "))) }
 }
 
-fn render_tuple(krate: &TranslatedCrate, generics: &GenericArgs) -> Result<String, Error> {
-    let elems = render_type_args(krate, generics)?;
+fn render_tuple(
+    krate: &TranslatedCrate,
+    ctx: &TypeContext<'_>,
+    generics: &GenericArgs,
+) -> Result<String, Error> {
+    let elems = render_type_args(krate, ctx, generics)?;
     match elems.as_slice() {
         [] => Ok("Unit".to_string()),
         [elem] => Ok(format!("({elem})")),
@@ -86,8 +122,31 @@ fn render_tuple(krate: &TranslatedCrate, generics: &GenericArgs) -> Result<Strin
     }
 }
 
-fn render_type_args(krate: &TranslatedCrate, generics: &GenericArgs) -> Result<Vec<String>, Error> {
-    generics.types.iter().map(|ty| render_type(krate, ty)).collect()
+fn render_type_args(
+    krate: &TranslatedCrate,
+    ctx: &TypeContext<'_>,
+    generics: &GenericArgs,
+) -> Result<Vec<String>, Error> {
+    generics.types.iter().map(|ty| render_type_with_ctx(krate, ctx, ty)).collect()
+}
+
+fn render_type_var(
+    ctx: &TypeContext<'_>,
+    type_var: DeBruijnVar<TypeVarId>,
+) -> Result<String, Error> {
+    let type_id = match type_var {
+        DeBruijnVar::Free(type_id) => type_id,
+        DeBruijnVar::Bound(db, type_id) if db.index == 0 => type_id,
+        DeBruijnVar::Bound(_, _) => {
+            return Err(Error::UnsupportedType { kind: "nested type variable" });
+        }
+    };
+    let params = ctx.generics.ok_or(Error::UnsupportedType { kind: "type variable" })?;
+    let param = params
+        .types
+        .get(type_id)
+        .ok_or_else(|| Error::MissingTypeParam { index: type_id.index() })?;
+    Ok(crate::names::lean_identifier(&param.name))
 }
 
 fn render_literal_type(literal: LiteralTy) -> &'static str {
@@ -144,9 +203,9 @@ fn last_ident_segment(name: &Name) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use charon_lib::ast::{
-        ConstantExpr, ConstantExprKind, GenericArgs, HashConsed, ItemId, Literal, LiteralTy, Name,
-        PathElem, RefKind, Region, ScalarValue, TranslatedCrate, Ty, TyKind, TypeDeclId,
-        TypeDeclRef, TypeId, UIntTy,
+        ConstantExpr, ConstantExprKind, DeBruijnVar, GenericArgs, GenericParams, HashConsed,
+        ItemId, Literal, LiteralTy, Name, PathElem, RefKind, Region, ScalarValue, TranslatedCrate,
+        Ty, TyKind, TypeDeclId, TypeDeclRef, TypeId, TypeParam, TypeVarId, UIntTy,
     };
 
     use super::*;
@@ -170,6 +229,14 @@ mod tests {
             const_generics: Default::default(),
             trait_refs: Default::default(),
         })
+    }
+
+    fn params(types: Vec<TypeParam>) -> GenericParams {
+        GenericParams { types: types.into(), ..Default::default() }
+    }
+
+    fn type_var() -> Ty {
+        ty(TyKind::TypeVar(DeBruijnVar::Free(TypeVarId::ZERO)))
     }
 
     fn tuple(types: Vec<Ty>) -> Ty {
@@ -236,5 +303,35 @@ mod tests {
         let adt = ty(TyKind::Adt(TypeDeclRef { id: TypeId::Adt(type_id), generics: args(vec![]) }));
 
         assert_eq!(render_type(&krate, &adt).unwrap(), "Positive");
+    }
+
+    #[test]
+    fn renders_type_variables_from_generic_context() {
+        let krate = TranslatedCrate::default();
+        let generics = params(vec![TypeParam::new(TypeVarId::ZERO, "T".to_string())]);
+
+        assert_eq!(render_type_with_generics(&krate, &generics, &type_var()).unwrap(), "T");
+    }
+
+    #[test]
+    fn renders_named_adts_with_type_arguments() {
+        let type_id = TypeDeclId::ZERO;
+        let mut krate = TranslatedCrate::default();
+        krate.item_names.insert(
+            ItemId::Type(type_id),
+            Name {
+                name: vec![
+                    PathElem::Ident("crate".to_string(), Default::default()),
+                    PathElem::Ident("Wrapper".to_string(), Default::default()),
+                ],
+            },
+        );
+        let generics = params(vec![TypeParam::new(TypeVarId::ZERO, "T".to_string())]);
+        let wrapper = ty(TyKind::Adt(TypeDeclRef {
+            id: TypeId::Adt(type_id),
+            generics: args(vec![type_var()]),
+        }));
+
+        assert_eq!(render_type_with_generics(&krate, &generics, &wrapper).unwrap(), "(Wrapper T)");
     }
 }

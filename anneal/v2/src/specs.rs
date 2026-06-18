@@ -7,7 +7,8 @@ use anyhow::Context as _;
 use std::collections::HashMap;
 
 use charon_lib::ast::{
-    Body, FunDecl, FunDeclId, Local, RefKind, TraitDeclId, Ty, TyKind, TypeDeclId, TypeId,
+    Body, FunDecl, FunDeclId, GenericParams, Local, RefKind, TraitDeclId, Ty, TyKind, TypeDeclId,
+    TypeId,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -100,11 +101,9 @@ fn render_item(
                 .type_decls
                 .get(type_id)
                 .ok_or(Error::MissingDecl { kind: "type", index: item.item_id.index })?;
-            if !ty.generics.types.is_empty() || !ty.generics.const_generics.is_empty() {
-                return Err(Error::UnsupportedGenerics { path: item.path.join("::") });
-            }
+            let generics = lean_generics(&ty.generics, &item.path.join("::"))?;
             let path = crate::names::item_path(krate, &ty.item_meta.name)?;
-            render_type_invariant(&path, body, out);
+            render_type_invariant(&path, &generics, body, out);
         }
         crate::annotations::AnnotationBody::TraitInvariant(body) => {
             let trait_id = TraitDeclId::from_usize(item.item_id.index);
@@ -147,6 +146,7 @@ struct FunctionArg {
 #[derive(Debug)]
 struct FunctionSpec<'a> {
     path: crate::names::LeanItemPath,
+    generics: LeanGenerics,
     args: Vec<FunctionArg>,
     return_type: Option<String>,
     annotation: &'a crate::annotations::FunctionAnnotation,
@@ -173,20 +173,19 @@ fn function_spec<'a>(
     annotation: &'a crate::annotations::FunctionAnnotation,
 ) -> Result<FunctionSpec<'a>, Error> {
     let path = item.path.join("::");
-    if !fun.generics.types.is_empty()
-        || !fun.generics.const_generics.is_empty()
-        || !fun.generics.trait_clauses.is_empty()
-    {
-        return Err(Error::UnsupportedGenerics { path });
-    }
+    let generics = lean_generics(&fun.generics, &path)?;
     let item_path = crate::names::item_path(krate, &fun.item_meta.name)?;
     let args = function_args(krate, fun, item)?;
     let return_type = if is_unit_type(&fun.signature.output) {
         None
     } else {
-        Some(crate::lean_types::render_type(krate, &fun.signature.output)?)
+        Some(crate::lean_types::render_type_with_generics(
+            krate,
+            &fun.generics,
+            &fun.signature.output,
+        )?)
     };
-    Ok(FunctionSpec { path: item_path, args, return_type, annotation })
+    Ok(FunctionSpec { path: item_path, generics, args, return_type, annotation })
 }
 
 fn function_args(
@@ -230,11 +229,32 @@ fn function_args(
             let ty = local.map(|local| &local.ty).unwrap_or(signature_ty);
             Ok(FunctionArg {
                 name: crate::names::lean_identifier(name),
-                lean_type: crate::lean_types::render_type(krate, ty)?,
+                lean_type: crate::lean_types::render_type_with_generics(krate, &fun.generics, ty)?,
                 is_mut_ref: is_mut_ref(ty),
             })
         })
         .collect()
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct LeanGenerics {
+    type_params: Vec<String>,
+}
+
+fn lean_generics(params: &GenericParams, path: &str) -> Result<LeanGenerics, Error> {
+    if !params.const_generics.is_empty()
+        || !params.trait_clauses.is_empty()
+        || !params.trait_type_constraints.is_empty()
+    {
+        return Err(Error::UnsupportedGenerics { path: path.to_string() });
+    }
+    Ok(LeanGenerics {
+        type_params: params
+            .types
+            .iter()
+            .map(|param| crate::names::lean_identifier(&param.name))
+            .collect(),
+    })
 }
 
 fn body_input_locals(body: &Body) -> Option<Vec<&Local>> {
@@ -276,6 +296,7 @@ fn render_function_pre(spec: &FunctionSpec<'_>, out: &mut String) {
         return;
     }
     out.push_str("structure Pre");
+    push_generic_binders(out, &spec.generics);
     push_arg_binders(out, &spec.args);
     out.push_str(" : Prop where\n");
     for arg in &spec.args {
@@ -300,6 +321,7 @@ fn render_function_pre(spec: &FunctionSpec<'_>, out: &mut String) {
 
 fn render_function_post(spec: &FunctionSpec<'_>, out: &mut String) {
     out.push_str("structure Post");
+    push_generic_binders(out, &spec.generics);
     push_arg_binders(out, &spec.args);
     if let Some(return_type) = &spec.return_type {
         out.push_str(&format!(" (ret : {return_type})"));
@@ -351,6 +373,7 @@ fn render_function_spec(spec: &FunctionSpec<'_>, out: &mut String) {
 
 fn render_function_theorem(kind: &str, spec: &FunctionSpec<'_>, out: &mut String) {
     out.push_str(&format!("{kind} spec"));
+    push_generic_binders(out, &spec.generics);
     push_arg_binders(out, &spec.args);
     if function_has_pre(spec) {
         out.push_str(" (h_req : Pre");
@@ -439,10 +462,16 @@ fn push_arg_binders(out: &mut String, args: &[FunctionArg]) {
 }
 
 fn function_call(spec: &FunctionSpec<'_>) -> String {
-    std::iter::once(spec.path.item.as_str())
-        .chain(spec.args.iter().map(|arg| arg.name.as_str()))
-        .collect::<Vec<_>>()
-        .join(" ")
+    let mut parts = vec![spec.path.item.clone()];
+    parts.extend(spec.generics.type_params.iter().map(|param| format!("({param} := {param})")));
+    parts.extend(spec.args.iter().map(|arg| arg.name.clone()));
+    parts.join(" ")
+}
+
+fn push_generic_binders(out: &mut String, generics: &LeanGenerics) {
+    for param in &generics.type_params {
+        out.push_str(&format!(" {{{param} : Type}}"));
+    }
 }
 
 fn ret_destructure_lhs(spec: &FunctionSpec<'_>) -> Option<String> {
@@ -546,15 +575,26 @@ fn render_lean_lines(lean: &str, indent: &str, out: &mut String) {
 
 fn render_type_invariant(
     path: &crate::names::LeanItemPath,
+    generics: &LeanGenerics,
     body: &crate::annotations::TypeInvariantAnnotation,
     out: &mut String,
 ) {
     render_namespace_open(path, out);
     render_context(&body.context, out);
-    out.push_str(&format!("instance : Anneal.IsValid {} where\n", path.item));
+    out.push_str("instance");
+    push_generic_binders(out, generics);
+    out.push_str(&format!(" : Anneal.IsValid {} where\n", type_application(&path.item, generics)));
     out.push_str("  isValid self :=\n");
     render_fragments(&body.is_valid, "    ", out);
     render_namespace_close(path, out);
+}
+
+fn type_application(name: &str, generics: &LeanGenerics) -> String {
+    if generics.type_params.is_empty() {
+        name.to_string()
+    } else {
+        format!("({name} {})", generics.type_params.join(" "))
+    }
 }
 
 fn render_trait_invariant(
@@ -650,7 +690,7 @@ mod tests {
         };
         let mut out = String::new();
 
-        render_type_invariant(&path("Positive"), &body, &mut out);
+        render_type_invariant(&path("Positive"), &LeanGenerics::default(), &body, &mut out);
 
         assert!(out.contains("namespace Positive\n\n"));
         assert!(out.contains("def minPositive : Nat := 1\n\n"));
@@ -683,6 +723,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: path("incr"),
+            generics: LeanGenerics::default(),
             args: vec![FunctionArg {
                 name: "x".to_string(),
                 lean_type: "Std.U32".to_string(),
@@ -723,6 +764,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: path("read"),
+            generics: LeanGenerics::default(),
             args: Vec::new(),
             return_type: Some("Std.U32".to_string()),
             annotation: &annotation,
@@ -734,5 +776,47 @@ mod tests {
         assert!(out.contains("axiom spec :\n"));
         assert!(out.contains("Aeneas.Std.WP.spec (read) (fun ret_ => Post ret_)"));
         assert!(!out.contains("apply Anneal.wp_prove_orthogonal"));
+    }
+
+    #[test]
+    fn renders_type_parameter_binders_and_applications() {
+        let type_body =
+            TypeInvariantAnnotation { context: Vec::new(), is_valid: vec![fragment("True")] };
+        let generics = LeanGenerics { type_params: vec!["T".to_string()] };
+        let mut out = String::new();
+
+        render_type_invariant(&path("Wrapper"), &generics, &type_body, &mut out);
+
+        assert!(out.contains("instance {T : Type} : Anneal.IsValid (Wrapper T) where\n"));
+
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::Spec,
+            context: Vec::new(),
+            requires: Vec::new(),
+            ensures: vec![named_fragment("result", "ret = x")],
+            proof_context: Vec::new(),
+            proofs: vec![named_fragment("result", "simp_all [generic_id]")],
+        };
+        let spec = FunctionSpec {
+            path: path("generic_id"),
+            generics,
+            args: vec![FunctionArg {
+                name: "x".to_string(),
+                lean_type: "T".to_string(),
+                is_mut_ref: false,
+            }],
+            return_type: Some("T".to_string()),
+            annotation: &annotation,
+        };
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains("structure Pre {T : Type} (x : T) : Prop where\n"));
+        assert!(out.contains("structure Post {T : Type} (x : T) (ret : T) : Prop where\n"));
+        assert!(out.contains("theorem spec {T : Type} (x : T) (h_req : Pre x) :\n"));
+        assert!(
+            out.contains("Aeneas.Std.WP.spec (generic_id (T := T) x) (fun ret_ => Post x ret_)")
+        );
+        assert!(out.contains("        result := by\n          simp_all [generic_id]\n"));
     }
 }
