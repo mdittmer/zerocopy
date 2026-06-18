@@ -15,6 +15,7 @@ pub fn write_workspace(
     toolchain: &crate::setup::Toolchain,
     roots: &crate::resolve::LockedRoots<'_>,
     artifacts: &[crate::aeneas::LeanArtifact],
+    allow_sorry: bool,
 ) -> anyhow::Result<std::path::PathBuf> {
     let lean_root = roots.lean_root();
     let generated_root = roots.lean_generated_root();
@@ -37,6 +38,8 @@ pub fn write_workspace(
     std::fs::write(lean_root.join("lakefile.lean"), lakefile(toolchain, &modules)?).with_context(
         || format!("failed to write `{}`", lean_root.join("lakefile.lean").display()),
     )?;
+
+    write_anneal_library(&lean_root, allow_sorry)?;
 
     write_manifest(toolchain, &lean_root)?;
 
@@ -81,6 +84,14 @@ package anneal_verification
 lean_lib Generated where
   srcDir := "generated"
   roots := #[{roots}]
+
+@[default_target]
+lean_lib Anneal where
+  srcDir := "anneal"
+  roots := #[`Config, `Anneal]
+
+lean_lib User where
+  srcDir := "user"
 "#
     ))
 }
@@ -133,6 +144,46 @@ fn write_manifest(
     let manifest_path = lean_root.join("lake-manifest.json");
     let file = std::fs::File::create(&manifest_path)?;
     serde_json::to_writer_pretty(file, &manifest)?;
+    Ok(())
+}
+
+const ANNEAL_PRELUDE: &str = include_str!("Anneal.lean");
+
+fn write_anneal_library(
+    lean_root: &std::path::Path,
+    allow_sorry: bool,
+) -> anyhow::Result<()> {
+    let anneal_dir = lean_root.join("anneal");
+    std::fs::create_dir_all(&anneal_dir)
+        .with_context(|| format!("failed to create `{}`", anneal_dir.display()))?;
+
+    let config_content = if allow_sorry { "axiom Anneal.allow_sorry : True\n" } else { "" };
+    std::fs::write(anneal_dir.join("Config.lean"), config_content)
+        .with_context(|| format!("failed to write `{}`", anneal_dir.join("Config.lean").display()))?;
+
+    let mut prelude = String::new();
+    prelude.push_str("import Config\n");
+    if !allow_sorry {
+        prelude.push_str("import Lean\n");
+    }
+    prelude.push_str(ANNEAL_PRELUDE);
+
+    if !allow_sorry {
+        prelude.push_str("\n\n");
+        prelude.push_str("open Lean Elab Tactic Term\n\n");
+        prelude.push_str("elab (priority := high) \"sorry\" : tactic =>\n");
+        prelude.push_str(
+            "  throwError \"The 'sorry' tactic is forbidden; use --allow-sorry to allow it.\"\n\n",
+        );
+        prelude.push_str("elab (priority := high) \"sorry\" : term =>\n");
+        prelude.push_str(
+            "  throwError \"The 'sorry' term is forbidden; use --allow-sorry to allow it.\"\n",
+        );
+    }
+
+    std::fs::write(anneal_dir.join("Anneal.lean"), prelude)
+        .with_context(|| format!("failed to write `{}`", anneal_dir.join("Anneal.lean").display()))?;
+
     Ok(())
 }
 

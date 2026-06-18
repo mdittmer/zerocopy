@@ -87,11 +87,12 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
 }
 
 fn expand(args: ExpandArgs) -> anyhow::Result<()> {
-    compile_and_extract(args, |_, _, _, _| Ok(()))
+    compile_and_extract(&args, |_, _, _, _| Ok(()))
 }
 
 fn generate(args: ExpandArgs) -> anyhow::Result<()> {
-    compile_and_extract(args, |toolchain, locked_roots, packages, annotated_artifacts| {
+    let allow_sorry = args.resolve_args.allow_sorry;
+    compile_and_extract(&args, move |toolchain, locked_roots, packages, annotated_artifacts| {
         let lean_artifacts = crate::aeneas::run_aeneas(toolchain, locked_roots, packages)?;
 
         for annotated in annotated_artifacts {
@@ -115,7 +116,7 @@ fn generate(args: ExpandArgs) -> anyhow::Result<()> {
             log::info!("Generated specs for {} at {}", slug, specs_path.display());
         }
 
-        let lean_root = crate::lean::write_workspace(toolchain, locked_roots, &lean_artifacts)?;
+        let lean_root = crate::lean::write_workspace(toolchain, locked_roots, &lean_artifacts, allow_sorry)?;
         for artifact in &lean_artifacts {
             log::debug!(
                 "Generated Aeneas Lean for {} at {}",
@@ -139,7 +140,7 @@ fn generate(args: ExpandArgs) -> anyhow::Result<()> {
 }
 
 fn compile_and_extract(
-    args: ExpandArgs,
+    args: &ExpandArgs,
     after_extract: impl FnOnce(
         &crate::setup::Toolchain,
         &crate::resolve::LockedRoots<'_>,
@@ -160,8 +161,8 @@ fn compile_and_extract(
         return Ok(());
     }
     let mut locked_roots = roots.lock_run_root()?;
-    if let Some(output_dir) = args.output_dir {
-        locked_roots.llbc_override = Some(output_dir);
+    if let Some(output_dir) = &args.output_dir {
+        locked_roots.llbc_override = Some(output_dir.clone());
     }
     let show_progress = !args.no_progress;
     crate::charon::run_charon(
