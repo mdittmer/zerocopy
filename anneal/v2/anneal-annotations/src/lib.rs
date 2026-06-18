@@ -249,7 +249,8 @@ fn expand_item(
     sections: Vec<Section>,
     item: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let metadata = LitStr::new(&metadata_json(kind, &sections), proc_macro2::Span::call_site());
+    let arg_names = extract_arg_names(&item);
+    let metadata = LitStr::new(&metadata_json(kind, &sections, arg_names), proc_macro2::Span::call_site());
     let opaque = kind.injects_opacity().then(|| quote!(#[aeneas::opaque]));
     quote! {
         #opaque
@@ -258,8 +259,8 @@ fn expand_item(
     }
 }
 
-fn metadata_json(kind: AnnotationKind, sections: &[Section]) -> String {
-    let sections = sections
+fn metadata_json(kind: AnnotationKind, sections: &[Section], arg_names: Option<Vec<String>>) -> String {
+    let sections_json = sections
         .iter()
         .map(|section| {
             serde_json::json!({
@@ -269,16 +270,48 @@ fn metadata_json(kind: AnnotationKind, sections: &[Section]) -> String {
             })
         })
         .collect::<Vec<_>>();
-    format!(
-        "{}{}",
-        METADATA_PREFIX,
-        serde_json::json!({
-            "version": 1,
-            "kind": kind.as_str(),
-            "sections": sections,
-        })
-    )
+    let mut val = serde_json::json!({
+        "version": 1,
+        "kind": kind.as_str(),
+        "sections": sections_json,
+    });
+    if let Some(args) = arg_names {
+        val.as_object_mut().unwrap().insert("argument_names".to_string(), serde_json::json!(args));
+    }
+    format!("{}{}", METADATA_PREFIX, val)
 }
+
+fn extract_arg_names(item: &proc_macro2::TokenStream) -> Option<Vec<String>> {
+    if let Ok(item_fn) = syn::parse2::<syn::ItemFn>(item.clone()) {
+        return Some(get_arg_names_from_sig(&item_fn.sig));
+    }
+    if let Ok(trait_item_fn) = syn::parse2::<syn::TraitItemFn>(item.clone()) {
+        return Some(get_arg_names_from_sig(&trait_item_fn.sig));
+    }
+    if let Ok(impl_item_fn) = syn::parse2::<syn::ImplItemFn>(item.clone()) {
+        return Some(get_arg_names_from_sig(&impl_item_fn.sig));
+    }
+    if let Ok(foreign_item_fn) = syn::parse2::<syn::ForeignItemFn>(item.clone()) {
+        return Some(get_arg_names_from_sig(&foreign_item_fn.sig));
+    }
+    None
+}
+
+fn get_arg_names_from_sig(sig: &syn::Signature) -> Vec<String> {
+    sig.inputs
+        .iter()
+        .filter_map(|arg| match arg {
+            syn::FnArg::Receiver(_) => Some("self".to_string()),
+            syn::FnArg::Typed(pat_type) => {
+                match &*pat_type.pat {
+                    syn::Pat::Ident(pat_ident) => Some(pat_ident.ident.to_string()),
+                    _ => None,
+                }
+            }
+        })
+        .collect()
+}
+
 
 #[cfg(test)]
 mod tests {
@@ -329,7 +362,7 @@ mod tests {
                 is_valid = "self.val > 0"
             },
         );
-        let metadata = metadata_json(AnnotationKind::TypeInvariant, &sections);
+        let metadata = metadata_json(AnnotationKind::TypeInvariant, &sections, None);
         let payload = metadata.strip_prefix(METADATA_PREFIX).unwrap();
         let value: serde_json::Value = serde_json::from_str(payload).unwrap();
 
@@ -338,6 +371,7 @@ mod tests {
         assert_eq!(value["sections"][0]["kind"], "is_valid");
         assert_eq!(value["sections"][0]["lean"], "self.val > 0");
     }
+
 
     #[test]
     fn unsafe_axiom_injects_aeneas_opacity() {
@@ -372,4 +406,18 @@ mod tests {
 
         assert!(err.to_string().contains("pure Lean code"));
     }
+
+    #[test]
+    fn expand_item_extracts_argument_names() {
+        let expanded = expand_item(
+            AnnotationKind::Spec,
+            vec![],
+            quote! {
+                pub fn my_fn(a: u32, b: &mut String, c: *const u8) {}
+            },
+        );
+        let text = expanded.to_string();
+        assert!(text.contains(r#"\"argument_names\":[\"a\",\"b\",\"c\"]"#), "actual text: {}", text);
+    }
 }
+
