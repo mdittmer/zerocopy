@@ -1,0 +1,499 @@
+// Copyright 2026 The Fuchsia Authors
+//
+// Licensed under the 2-Clause BSD License <LICENSE-BSD or
+// https://opensource.org/license/bsd-2-clause>, Apache License, Version 2.0
+// <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+// license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+// This file may not be copied, modified, or distributed except according to
+// those terms.
+
+//! Extraction of Anneal v2 annotations from Charon metadata.
+//!
+//! The user-facing syntax is real Rust item attributes from the
+//! `anneal-annotations` proc-macro crate. Those macros lower to hidden doc
+//! metadata because Charon preserves doc comments in LLBC. This module treats
+//! the LLBC metadata as the source of truth; it never scans Rust source files.
+
+use anyhow::Context as _;
+use charon_lib::ast::{AttrInfo, Attribute, Body, ItemMeta, ItemOpacity, Name, PathElem};
+
+pub const METADATA_PREFIX: &str = "anneal:v2:";
+
+const SUPPORTED_METADATA_VERSION: u32 = 1;
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct Annotation {
+    pub version: u32,
+    pub kind: AnnotationKind,
+    pub sections: Vec<AnnotationSection>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AnnotationKind {
+    Spec,
+    UnsafeAxiom,
+    TypeInvariant,
+    TraitInvariant,
+    ImplInvariant,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+pub struct AnnotationSection {
+    pub kind: SectionKind,
+    pub name: Option<String>,
+    pub lean: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SectionKind {
+    Context,
+    Requires,
+    Ensures,
+    ProofContext,
+    Proof,
+    IsValid,
+    IsSafe,
+}
+
+#[derive(Debug, Clone)]
+pub struct AnnotatedArtifact {
+    pub artifact: crate::scanner::AnnealArtifact,
+    pub items: Vec<AnnotatedItem>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnnotatedItem {
+    pub item_kind: AnnotatedItemKind,
+    pub path: Vec<String>,
+    pub annotation: Annotation,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AnnotatedItemKind {
+    Function,
+    Type,
+    Trait,
+    Impl,
+    Global,
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("failed to parse Anneal metadata on `{path}`: {source}")]
+    InvalidMetadata { path: String, source: serde_json::Error },
+    #[error("unsupported Anneal metadata version {version} on `{path}`")]
+    UnsupportedVersion { path: String, version: u32 },
+    #[error("multiple Anneal annotations found on `{path}`")]
+    MultipleAnnotations { path: String },
+    #[error("`#[anneal::{annotation}]` is not valid on {item_kind} `{path}`")]
+    InvalidItemKind { path: String, item_kind: &'static str, annotation: &'static str },
+    #[error("`#[anneal::unsafe_axiom]` did not make `{path}` opaque in LLBC")]
+    UnsafeAxiomNotOpaque { path: String },
+    #[error("`#[anneal::spec]` cannot verify opaque function `{path}`")]
+    SpecIsOpaque { path: String },
+    #[error("`requires` sections are only permitted on unsafe functions; `{path}` is safe")]
+    RequiresSafeFunction { path: String },
+    #[error("`#[anneal::{annotation}]` on `{path}` is missing a `{section}` section")]
+    MissingRequiredSection { path: String, annotation: &'static str, section: &'static str },
+    #[error("`#[anneal::impl_invariant]` on `{path}` is parsed but not supported yet")]
+    ImplInvariantUnsupported { path: String },
+}
+
+pub fn extract_crate_annotations(
+    crate_data: &charon_lib::export::CrateData,
+) -> Result<Vec<AnnotatedItem>, Error> {
+    let krate = &crate_data.translated;
+    let mut items = Vec::new();
+
+    for fun in &krate.fun_decls {
+        let facts = ItemFacts {
+            kind: AnnotatedItemKind::Function,
+            opacity: ItemOpacity::Transparent,
+            is_unsafe_function: Some(fun.signature.is_unsafe),
+            is_opaque_function: Some(matches!(fun.body, Body::Opaque)),
+        };
+        maybe_push_annotation(&mut items, &fun.item_meta, facts)?;
+    }
+    for ty in &krate.type_decls {
+        maybe_push_annotation(
+            &mut items,
+            &ty.item_meta,
+            ItemFacts::plain(AnnotatedItemKind::Type),
+        )?;
+    }
+    for tr in &krate.trait_decls {
+        maybe_push_annotation(
+            &mut items,
+            &tr.item_meta,
+            ItemFacts::plain(AnnotatedItemKind::Trait),
+        )?;
+    }
+    for imp in &krate.trait_impls {
+        maybe_push_annotation(
+            &mut items,
+            &imp.item_meta,
+            ItemFacts::plain(AnnotatedItemKind::Impl),
+        )?;
+    }
+    for global in &krate.global_decls {
+        maybe_push_annotation(
+            &mut items,
+            &global.item_meta,
+            ItemFacts::plain(AnnotatedItemKind::Global),
+        )?;
+    }
+
+    Ok(items)
+}
+
+pub fn extract_artifact_annotations(
+    roots: &crate::resolve::LockedRoots<'_>,
+    artifacts: &[crate::scanner::AnnealArtifact],
+) -> anyhow::Result<Vec<AnnotatedArtifact>> {
+    artifacts
+        .iter()
+        .map(|artifact| {
+            let llbc_path = artifact.llbc_path(roots);
+            let file = std::fs::File::open(&llbc_path).map_err(anyhow::Error::from).with_context(
+                || format!("failed to open LLBC artifact `{}`", llbc_path.display()),
+            )?;
+            let crate_data: charon_lib::export::CrateData = serde_json::from_reader(file)
+                .with_context(|| {
+                    format!("failed to parse LLBC artifact `{}`", llbc_path.display())
+                })?;
+            let items = extract_crate_annotations(&crate_data).with_context(|| {
+                format!("failed to extract Anneal annotations from `{}`", llbc_path.display())
+            })?;
+            Ok(AnnotatedArtifact { artifact: artifact.clone(), items })
+        })
+        .collect()
+}
+
+fn maybe_push_annotation(
+    items: &mut Vec<AnnotatedItem>,
+    meta: &ItemMeta,
+    facts: ItemFacts,
+) -> Result<(), Error> {
+    let path = path_segments(&meta.name);
+    let Some(annotation) = extract_annotation(&meta.attr_info, &path)? else {
+        return Ok(());
+    };
+    validate_annotation(&annotation, facts.with_opacity(meta.opacity), &path)?;
+    items.push(AnnotatedItem { item_kind: facts.kind, path, annotation });
+    Ok(())
+}
+
+fn extract_annotation(attr_info: &AttrInfo, path: &[String]) -> Result<Option<Annotation>, Error> {
+    let path = display_path(path);
+    let mut annotation = None;
+
+    for attr in &attr_info.attributes {
+        let Attribute::DocComment(comment) = attr else {
+            continue;
+        };
+        let Some(payload) = comment.trim_start().strip_prefix(METADATA_PREFIX) else {
+            continue;
+        };
+        if annotation.is_some() {
+            return Err(Error::MultipleAnnotations { path });
+        }
+        let parsed: Annotation = serde_json::from_str(payload)
+            .map_err(|source| Error::InvalidMetadata { path: path.clone(), source })?;
+        if parsed.version != SUPPORTED_METADATA_VERSION {
+            return Err(Error::UnsupportedVersion { path: path.clone(), version: parsed.version });
+        }
+        annotation = Some(parsed);
+    }
+
+    Ok(annotation)
+}
+
+#[derive(Debug, Clone, Copy)]
+struct ItemFacts {
+    kind: AnnotatedItemKind,
+    opacity: ItemOpacity,
+    is_unsafe_function: Option<bool>,
+    is_opaque_function: Option<bool>,
+}
+
+impl ItemFacts {
+    fn plain(kind: AnnotatedItemKind) -> Self {
+        Self {
+            kind,
+            opacity: ItemOpacity::Transparent,
+            is_unsafe_function: None,
+            is_opaque_function: None,
+        }
+    }
+
+    fn with_opacity(mut self, opacity: ItemOpacity) -> Self {
+        self.opacity = opacity;
+        self
+    }
+}
+
+fn validate_annotation(
+    annotation: &Annotation,
+    facts: ItemFacts,
+    path: &[String],
+) -> Result<(), Error> {
+    use AnnotatedItemKind::*;
+    use AnnotationKind::*;
+
+    let path = display_path(path);
+    match (annotation.kind, facts.kind) {
+        (Spec, Function) => {
+            if facts.is_opaque_function == Some(true) || facts.opacity == ItemOpacity::Opaque {
+                return Err(Error::SpecIsOpaque { path });
+            }
+            if annotation.sections.iter().any(|section| section.kind == SectionKind::Requires)
+                && facts.is_unsafe_function == Some(false)
+            {
+                return Err(Error::RequiresSafeFunction { path });
+            }
+        }
+        (UnsafeAxiom, Function) => {
+            if facts.is_opaque_function != Some(true) && facts.opacity != ItemOpacity::Opaque {
+                return Err(Error::UnsafeAxiomNotOpaque { path });
+            }
+            if annotation.sections.iter().any(|section| section.kind == SectionKind::Requires)
+                && facts.is_unsafe_function == Some(false)
+            {
+                return Err(Error::RequiresSafeFunction { path });
+            }
+        }
+        (TypeInvariant, Type) => {
+            require_section(annotation, SectionKind::IsValid, &path, "type_invariant", "is_valid")?;
+        }
+        (TraitInvariant, Trait) => {
+            require_section(annotation, SectionKind::IsSafe, &path, "trait_invariant", "is_safe")?;
+        }
+        (ImplInvariant, Impl) => {
+            return Err(Error::ImplInvariantUnsupported { path });
+        }
+        (kind, item_kind) => {
+            return Err(Error::InvalidItemKind {
+                path,
+                item_kind: item_kind.as_str(),
+                annotation: kind.as_str(),
+            });
+        }
+    }
+
+    Ok(())
+}
+
+fn require_section(
+    annotation: &Annotation,
+    section: SectionKind,
+    path: &str,
+    annotation_name: &'static str,
+    section_name: &'static str,
+) -> Result<(), Error> {
+    if annotation.sections.iter().any(|candidate| candidate.kind == section) {
+        Ok(())
+    } else {
+        Err(Error::MissingRequiredSection {
+            path: path.to_string(),
+            annotation: annotation_name,
+            section: section_name,
+        })
+    }
+}
+
+impl AnnotationKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Spec => "spec",
+            Self::UnsafeAxiom => "unsafe_axiom",
+            Self::TypeInvariant => "type_invariant",
+            Self::TraitInvariant => "trait_invariant",
+            Self::ImplInvariant => "impl_invariant",
+        }
+    }
+}
+
+impl AnnotatedItemKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Function => "function",
+            Self::Type => "type",
+            Self::Trait => "trait",
+            Self::Impl => "impl",
+            Self::Global => "global",
+        }
+    }
+}
+
+fn path_segments(name: &Name) -> Vec<String> {
+    name.name
+        .iter()
+        .map(|elem| match elem {
+            PathElem::Ident(ident, _) => ident.clone(),
+            PathElem::Impl(_) => "{impl}".to_string(),
+            PathElem::Instantiated(_) => "{instantiated}".to_string(),
+            PathElem::Target(target) => format!("{target:?}"),
+        })
+        .collect()
+}
+
+fn display_path(path: &[String]) -> String {
+    if path.is_empty() { "<unknown>".to_string() } else { path.join("::") }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn doc_attr(json: &str) -> AttrInfo {
+        AttrInfo {
+            attributes: vec![Attribute::DocComment(format!("{METADATA_PREFIX}{json}"))],
+            ..AttrInfo::default()
+        }
+    }
+
+    fn annotation_json(kind: &str, sections: serde_json::Value) -> String {
+        serde_json::json!({
+            "version": 1,
+            "kind": kind,
+            "sections": sections,
+        })
+        .to_string()
+    }
+
+    fn function_facts(is_unsafe: bool, is_opaque: bool) -> ItemFacts {
+        ItemFacts {
+            kind: AnnotatedItemKind::Function,
+            opacity: if is_opaque { ItemOpacity::Opaque } else { ItemOpacity::Transparent },
+            is_unsafe_function: Some(is_unsafe),
+            is_opaque_function: Some(is_opaque),
+        }
+    }
+
+    #[test]
+    fn extracts_metadata_doc_comment() {
+        let json = annotation_json(
+            "spec",
+            serde_json::json!([
+                {"kind": "ensures", "name": "value", "lean": "ret = x + 1"},
+                {"kind": "proof", "name": "value", "lean": "simp [incr]"}
+            ]),
+        );
+        let annotation = extract_annotation(&doc_attr(&json), &["crate".into(), "incr".into()])
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(annotation.kind, AnnotationKind::Spec);
+        assert_eq!(annotation.sections[0].kind, SectionKind::Ensures);
+        assert_eq!(annotation.sections[0].name.as_deref(), Some("value"));
+        assert_eq!(annotation.sections[0].lean, "ret = x + 1");
+        assert_eq!(annotation.sections[1].lean, "simp [incr]");
+    }
+
+    #[test]
+    fn rejects_duplicate_metadata_docs() {
+        let json = annotation_json("spec", serde_json::json!([]));
+        let attrs = AttrInfo {
+            attributes: vec![
+                Attribute::DocComment(format!("{METADATA_PREFIX}{json}")),
+                Attribute::DocComment(format!("{METADATA_PREFIX}{json}")),
+            ],
+            ..AttrInfo::default()
+        };
+        let err = extract_annotation(&attrs, &["crate".into(), "f".into()]).unwrap_err();
+
+        assert!(matches!(err, Error::MultipleAnnotations { .. }));
+    }
+
+    #[test]
+    fn unsafe_axiom_must_be_opaque() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::UnsafeAxiom,
+            sections: vec![AnnotationSection {
+                kind: SectionKind::Ensures,
+                name: Some("value".into()),
+                lean: "ret = 7".into(),
+            }],
+        };
+        let err = validate_annotation(
+            &annotation,
+            function_facts(true, false),
+            &["crate".into(), "read".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::UnsafeAxiomNotOpaque { .. }));
+    }
+
+    #[test]
+    fn spec_must_not_be_opaque() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::Spec,
+            sections: vec![AnnotationSection {
+                kind: SectionKind::Ensures,
+                name: Some("value".into()),
+                lean: "ret = 7".into(),
+            }],
+        };
+        let err = validate_annotation(
+            &annotation,
+            function_facts(true, true),
+            &["crate".into(), "seven".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::SpecIsOpaque { .. }));
+    }
+
+    #[test]
+    fn requires_sections_require_unsafe_functions() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::Spec,
+            sections: vec![AnnotationSection {
+                kind: SectionKind::Requires,
+                name: Some("pre".into()),
+                lean: "x > 0".into(),
+            }],
+        };
+        let err = validate_annotation(
+            &annotation,
+            function_facts(false, false),
+            &["crate".into(), "f".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::RequiresSafeFunction { .. }));
+    }
+
+    #[test]
+    fn type_invariant_requires_is_valid_section() {
+        let annotation =
+            Annotation { version: 1, kind: AnnotationKind::TypeInvariant, sections: vec![] };
+        let err = validate_annotation(
+            &annotation,
+            ItemFacts::plain(AnnotatedItemKind::Type),
+            &["crate".into(), "NonZero".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::MissingRequiredSection { .. }));
+    }
+
+    #[test]
+    fn rejects_annotation_on_wrong_item_kind() {
+        let annotation = Annotation { version: 1, kind: AnnotationKind::Spec, sections: vec![] };
+        let err = validate_annotation(
+            &annotation,
+            ItemFacts::plain(AnnotatedItemKind::Type),
+            &["crate".into(), "NotFn".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidItemKind { .. }));
+    }
+}

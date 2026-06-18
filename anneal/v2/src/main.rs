@@ -10,6 +10,7 @@
 use anyhow::Context as _;
 use clap::Parser as _;
 
+mod annotations;
 mod charon;
 mod diagnostics;
 mod resolve;
@@ -105,6 +106,21 @@ fn expand(args: ExpandArgs) -> anyhow::Result<()> {
         &packages,
         show_progress,
     )?;
+    let annotated_artifacts =
+        crate::annotations::extract_artifact_annotations(&locked_roots, &packages)?;
+    let annotated_items =
+        annotated_artifacts.iter().map(|artifact| artifact.items.len()).sum::<usize>();
+    for artifact in &annotated_artifacts {
+        log::debug!(
+            "Extracted {} Anneal annotation(s) from {}",
+            artifact.items.len(),
+            artifact.artifact.llbc_file_name()
+        );
+    }
+    log::info!(
+        "Extracted {annotated_items} Anneal annotation(s) from {} artifact(s)",
+        annotated_artifacts.len()
+    );
     Ok(())
 }
 
