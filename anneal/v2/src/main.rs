@@ -15,6 +15,7 @@ mod annotations;
 mod charon;
 mod diagnostics;
 mod lean;
+mod names;
 mod resolve;
 mod scanner;
 mod setup;
