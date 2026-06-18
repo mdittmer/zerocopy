@@ -33,6 +33,7 @@ pub enum Tool {
     Aeneas,
     Cargo,
     Charon,
+    Lake,
     Rustc,
 }
 
@@ -42,6 +43,7 @@ impl Tool {
             Self::Aeneas => "aeneas",
             Self::Cargo => "cargo",
             Self::Charon => "charon",
+            Self::Lake => "lake",
             Self::Rustc => "rustc",
         }
     }
@@ -50,13 +52,18 @@ impl Tool {
         match self {
             Self::Cargo | Self::Rustc => toolchain.rust_bin().join(self.name()),
             Self::Aeneas | Self::Charon => toolchain.aeneas_bin_dir().join(self.name()),
+            Self::Lake => toolchain.lean_bin_dir().join(self.name()),
         }
     }
 }
 
 const AENEAS_DIR: &str = "aeneas";
+const AENEAS_LEAN_DIR: &[&str] = &["backends", "lean"];
+const LEAN_DIR: &str = "lean";
 const RUST_SYSROOT: &str = "rust";
 const AENEAS_BIN_DIR: &str = "bin";
+const LEAN_BIN_DIR: &str = "bin";
+const LEAN_LIB_DIR: &str = "lib";
 const RUST_BIN_DIR: &str = "bin";
 const RUST_LIB_DIR: &str = "lib";
 
@@ -65,6 +72,11 @@ pub struct Toolchain {
 }
 
 impl Toolchain {
+    #[cfg(test)]
+    pub(crate) fn for_test(root: std::path::PathBuf) -> Self {
+        Self { root }
+    }
+
     pub fn resolve() -> anyhow::Result<Self> {
         let location = resolve_location();
         let root = CONFIG
@@ -80,6 +92,22 @@ impl Toolchain {
 
     pub fn aeneas_bin_dir(&self) -> std::path::PathBuf {
         self.root.join(AENEAS_DIR).join(AENEAS_BIN_DIR)
+    }
+
+    pub fn aeneas_lean_dir(&self) -> std::path::PathBuf {
+        AENEAS_LEAN_DIR.iter().fold(self.root.join(AENEAS_DIR), |path, segment| path.join(segment))
+    }
+
+    pub fn lean_root(&self) -> std::path::PathBuf {
+        self.root.join(LEAN_DIR)
+    }
+
+    pub fn lean_bin_dir(&self) -> std::path::PathBuf {
+        self.lean_root().join(LEAN_BIN_DIR)
+    }
+
+    pub fn lean_lib_dir(&self) -> std::path::PathBuf {
+        self.lean_root().join(LEAN_LIB_DIR)
     }
 
     pub fn rust_sysroot(&self) -> std::path::PathBuf {
@@ -108,8 +136,17 @@ impl Toolchain {
                     .env("PATH", prepend_current_path(self.rust_bin())?)
                     .env(rust_library_path_env_var(), self.rust_lib());
             }
+            Tool::Lake => {
+                cmd.env("PATH", prepend_current_path(self.lean_bin_dir())?)
+                    .env(rust_library_path_env_var(), self.lean_library_path()?);
+            }
         }
         Ok(cmd)
+    }
+
+    fn lean_library_path(&self) -> anyhow::Result<std::ffi::OsString> {
+        std::env::join_paths([self.lean_lib_dir(), self.lean_lib_dir().join(LEAN_DIR)])
+            .context("failed to construct Lean library path")
     }
 }
 

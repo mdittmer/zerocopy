@@ -14,6 +14,7 @@ mod aeneas;
 mod annotations;
 mod charon;
 mod diagnostics;
+mod lean;
 mod resolve;
 mod scanner;
 mod setup;
@@ -91,6 +92,7 @@ fn expand(args: ExpandArgs) -> anyhow::Result<()> {
 fn generate(args: ExpandArgs) -> anyhow::Result<()> {
     compile_and_extract(args, |toolchain, locked_roots, packages, _| {
         let lean_artifacts = crate::aeneas::run_aeneas(toolchain, locked_roots, packages)?;
+        let lean_root = crate::lean::write_workspace(toolchain, locked_roots, &lean_artifacts)?;
         for artifact in &lean_artifacts {
             log::debug!(
                 "Generated Aeneas Lean for {} at {}",
@@ -103,9 +105,11 @@ fn generate(args: ExpandArgs) -> anyhow::Result<()> {
             lean_artifacts.len(),
             locked_roots.lean_generated_root().display()
         );
+        println!("Lean workspace generated at: {}", lean_root.display());
         println!(
-            "Aeneas Lean output generated at: {}",
-            locked_roots.lean_generated_root().display()
+            "Build with: cd {} && {} --keep-toolchain build",
+            lean_root.display(),
+            crate::setup::Tool::Lake.path(toolchain).display()
         );
         Ok(())
     })
@@ -220,6 +224,21 @@ mod tests {
                 toolchain.aeneas_bin_dir()
             );
             assert!(
+                toolchain.aeneas_lean_dir().is_dir(),
+                "aeneas_lean_dir is not a directory: {:?}",
+                toolchain.aeneas_lean_dir()
+            );
+            assert!(
+                toolchain.lean_bin_dir().is_dir(),
+                "lean_bin_dir is not a directory: {:?}",
+                toolchain.lean_bin_dir()
+            );
+            assert!(
+                toolchain.lean_lib_dir().is_dir(),
+                "lean_lib_dir is not a directory: {:?}",
+                toolchain.lean_lib_dir()
+            );
+            assert!(
                 toolchain.rust_sysroot().is_dir(),
                 "rust_sysroot is not a directory: {:?}",
                 toolchain.rust_sysroot()
@@ -249,6 +268,11 @@ mod tests {
                 "rustc is not a file: {:?}",
                 crate::setup::Tool::Rustc.path(&toolchain)
             );
+            assert!(
+                crate::setup::Tool::Lake.path(&toolchain).is_file(),
+                "lake is not a file: {:?}",
+                crate::setup::Tool::Lake.path(&toolchain)
+            );
 
             let cmd = toolchain
                 .command(crate::setup::Tool::Charon)
@@ -266,6 +290,24 @@ mod tests {
             let lib_var =
                 if cfg!(target_os = "macos") { "DYLD_LIBRARY_PATH" } else { "LD_LIBRARY_PATH" };
             assert_eq!(command_env(&cmd, lib_var), Some(toolchain.rust_lib().as_os_str()));
+            assert!(command_env(&cmd, "HOME").is_none());
+
+            let cmd = toolchain
+                .command(crate::setup::Tool::Lake)
+                .expect("failed to construct lake command");
+            assert_eq!(
+                std::env::split_paths(command_env(&cmd, "PATH").expect("PATH must be set"))
+                    .next()
+                    .as_deref(),
+                Some(toolchain.lean_bin_dir().as_path())
+            );
+            assert_eq!(
+                std::env::split_paths(
+                    command_env(&cmd, lib_var).expect("Lean library path must be set")
+                )
+                .collect::<Vec<_>>(),
+                vec![toolchain.lean_lib_dir(), toolchain.lean_lib_dir().join("lean")]
+            );
             assert!(command_env(&cmd, "HOME").is_none());
         }
 
