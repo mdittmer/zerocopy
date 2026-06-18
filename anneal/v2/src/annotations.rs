@@ -57,6 +57,53 @@ pub enum SectionKind {
     IsSafe,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnnotationBody {
+    Function(FunctionAnnotation),
+    TypeInvariant(TypeInvariantAnnotation),
+    TraitInvariant(TraitInvariantAnnotation),
+    ImplInvariant(ImplInvariantAnnotation),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FunctionAnnotation {
+    pub kind: FunctionAnnotationKind,
+    pub context: Vec<LeanFragment>,
+    pub requires: Vec<LeanFragment>,
+    pub ensures: Vec<LeanFragment>,
+    pub proof_context: Vec<LeanFragment>,
+    pub proofs: Vec<LeanFragment>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FunctionAnnotationKind {
+    Spec,
+    UnsafeAxiom,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypeInvariantAnnotation {
+    pub context: Vec<LeanFragment>,
+    pub is_valid: Vec<LeanFragment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TraitInvariantAnnotation {
+    pub context: Vec<LeanFragment>,
+    pub is_safe: Vec<LeanFragment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImplInvariantAnnotation {
+    pub context: Vec<LeanFragment>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LeanFragment {
+    pub name: Option<String>,
+    pub lean: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct AnnotatedArtifact {
     pub artifact: crate::scanner::AnnealArtifact,
@@ -68,6 +115,7 @@ pub struct AnnotatedItem {
     pub item_kind: AnnotatedItemKind,
     pub path: Vec<String>,
     pub annotation: Annotation,
+    pub body: AnnotationBody,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,6 +137,8 @@ pub enum Error {
     MultipleAnnotations { path: String },
     #[error("`#[anneal::{annotation}]` is not valid on {item_kind} `{path}`")]
     InvalidItemKind { path: String, item_kind: &'static str, annotation: &'static str },
+    #[error("`{section}` sections are not valid in `#[anneal::{annotation}]` metadata on `{path}`")]
+    InvalidSection { path: String, annotation: &'static str, section: &'static str },
     #[error("`#[anneal::unsafe_axiom]` did not make `{path}` opaque in LLBC")]
     UnsafeAxiomNotOpaque { path: String },
     #[error("`#[anneal::spec]` cannot verify opaque function `{path}`")]
@@ -180,8 +230,8 @@ fn maybe_push_annotation(
     let Some(annotation) = extract_annotation(&meta.attr_info, &path)? else {
         return Ok(());
     };
-    validate_annotation(&annotation, facts.with_opacity(meta.opacity), &path)?;
-    items.push(AnnotatedItem { item_kind: facts.kind, path, annotation });
+    let body = validate_annotation(&annotation, facts.with_opacity(meta.opacity), &path)?;
+    items.push(AnnotatedItem { item_kind: facts.kind, path, annotation, body });
     Ok(())
 }
 
@@ -238,61 +288,162 @@ fn validate_annotation(
     annotation: &Annotation,
     facts: ItemFacts,
     path: &[String],
-) -> Result<(), Error> {
+) -> Result<AnnotationBody, Error> {
     use AnnotatedItemKind::*;
-    use AnnotationKind::*;
 
     let path = display_path(path);
-    match (annotation.kind, facts.kind) {
-        (Spec, Function) => {
-            if facts.is_opaque_function == Some(true) || facts.opacity == ItemOpacity::Opaque {
-                return Err(Error::SpecIsOpaque { path });
+    let body = annotation_body(annotation, &path)?;
+    match (&body, facts.kind) {
+        (AnnotationBody::Function(function), Function) => {
+            match function.kind {
+                FunctionAnnotationKind::Spec => {
+                    if facts.is_opaque_function == Some(true)
+                        || facts.opacity == ItemOpacity::Opaque
+                    {
+                        return Err(Error::SpecIsOpaque { path });
+                    }
+                }
+                FunctionAnnotationKind::UnsafeAxiom => {
+                    if facts.is_opaque_function != Some(true)
+                        && facts.opacity != ItemOpacity::Opaque
+                    {
+                        return Err(Error::UnsafeAxiomNotOpaque { path });
+                    }
+                }
             }
-            if annotation.sections.iter().any(|section| section.kind == SectionKind::Requires)
-                && facts.is_unsafe_function == Some(false)
-            {
+            if !function.requires.is_empty() && facts.is_unsafe_function == Some(false) {
                 return Err(Error::RequiresSafeFunction { path });
             }
         }
-        (UnsafeAxiom, Function) => {
-            if facts.is_opaque_function != Some(true) && facts.opacity != ItemOpacity::Opaque {
-                return Err(Error::UnsafeAxiomNotOpaque { path });
-            }
-            if annotation.sections.iter().any(|section| section.kind == SectionKind::Requires)
-                && facts.is_unsafe_function == Some(false)
-            {
-                return Err(Error::RequiresSafeFunction { path });
-            }
+        (AnnotationBody::TypeInvariant(ty), Type) => {
+            require_fragments(&ty.is_valid, &path, "type_invariant", "is_valid")?;
         }
-        (TypeInvariant, Type) => {
-            require_section(annotation, SectionKind::IsValid, &path, "type_invariant", "is_valid")?;
+        (AnnotationBody::TraitInvariant(tr), Trait) => {
+            require_fragments(&tr.is_safe, &path, "trait_invariant", "is_safe")?;
         }
-        (TraitInvariant, Trait) => {
-            require_section(annotation, SectionKind::IsSafe, &path, "trait_invariant", "is_safe")?;
-        }
-        (ImplInvariant, Impl) => {
+        (AnnotationBody::ImplInvariant(_), Impl) => {
             return Err(Error::ImplInvariantUnsupported { path });
         }
-        (kind, item_kind) => {
+        (body, item_kind) => {
             return Err(Error::InvalidItemKind {
                 path,
                 item_kind: item_kind.as_str(),
-                annotation: kind.as_str(),
+                annotation: body.annotation_kind_str(),
             });
         }
     }
 
-    Ok(())
+    Ok(body)
 }
 
-fn require_section(
-    annotation: &Annotation,
-    section: SectionKind,
+fn annotation_body(annotation: &Annotation, path: &str) -> Result<AnnotationBody, Error> {
+    let invalid = |section: SectionKind| Error::InvalidSection {
+        path: path.to_string(),
+        annotation: annotation.kind.as_str(),
+        section: section.as_str(),
+    };
+
+    match annotation.kind {
+        AnnotationKind::Spec => {
+            let mut body = FunctionAnnotation {
+                kind: FunctionAnnotationKind::Spec,
+                context: Vec::new(),
+                requires: Vec::new(),
+                ensures: Vec::new(),
+                proof_context: Vec::new(),
+                proofs: Vec::new(),
+            };
+            for section in &annotation.sections {
+                match section.kind {
+                    SectionKind::Context => body.context.push(section.fragment()),
+                    SectionKind::Requires => body.requires.push(section.fragment()),
+                    SectionKind::Ensures => body.ensures.push(section.fragment()),
+                    SectionKind::ProofContext => body.proof_context.push(section.fragment()),
+                    SectionKind::Proof => body.proofs.push(section.fragment()),
+                    kind @ (SectionKind::IsValid | SectionKind::IsSafe) => {
+                        return Err(invalid(kind));
+                    }
+                }
+            }
+            Ok(AnnotationBody::Function(body))
+        }
+        AnnotationKind::UnsafeAxiom => {
+            let mut body = FunctionAnnotation {
+                kind: FunctionAnnotationKind::UnsafeAxiom,
+                context: Vec::new(),
+                requires: Vec::new(),
+                ensures: Vec::new(),
+                proof_context: Vec::new(),
+                proofs: Vec::new(),
+            };
+            for section in &annotation.sections {
+                match section.kind {
+                    SectionKind::Context => body.context.push(section.fragment()),
+                    SectionKind::Requires => body.requires.push(section.fragment()),
+                    SectionKind::Ensures => body.ensures.push(section.fragment()),
+                    kind @ (SectionKind::ProofContext
+                    | SectionKind::Proof
+                    | SectionKind::IsValid
+                    | SectionKind::IsSafe) => return Err(invalid(kind)),
+                }
+            }
+            Ok(AnnotationBody::Function(body))
+        }
+        AnnotationKind::TypeInvariant => {
+            let mut body = TypeInvariantAnnotation { context: Vec::new(), is_valid: Vec::new() };
+            for section in &annotation.sections {
+                match section.kind {
+                    SectionKind::Context => body.context.push(section.fragment()),
+                    SectionKind::IsValid => body.is_valid.push(section.fragment()),
+                    kind @ (SectionKind::Requires
+                    | SectionKind::Ensures
+                    | SectionKind::ProofContext
+                    | SectionKind::Proof
+                    | SectionKind::IsSafe) => return Err(invalid(kind)),
+                }
+            }
+            Ok(AnnotationBody::TypeInvariant(body))
+        }
+        AnnotationKind::TraitInvariant => {
+            let mut body = TraitInvariantAnnotation { context: Vec::new(), is_safe: Vec::new() };
+            for section in &annotation.sections {
+                match section.kind {
+                    SectionKind::Context => body.context.push(section.fragment()),
+                    SectionKind::IsSafe => body.is_safe.push(section.fragment()),
+                    kind @ (SectionKind::Requires
+                    | SectionKind::Ensures
+                    | SectionKind::ProofContext
+                    | SectionKind::Proof
+                    | SectionKind::IsValid) => return Err(invalid(kind)),
+                }
+            }
+            Ok(AnnotationBody::TraitInvariant(body))
+        }
+        AnnotationKind::ImplInvariant => {
+            let mut body = ImplInvariantAnnotation { context: Vec::new() };
+            for section in &annotation.sections {
+                match section.kind {
+                    SectionKind::Context => body.context.push(section.fragment()),
+                    kind @ (SectionKind::Requires
+                    | SectionKind::Ensures
+                    | SectionKind::ProofContext
+                    | SectionKind::Proof
+                    | SectionKind::IsValid
+                    | SectionKind::IsSafe) => return Err(invalid(kind)),
+                }
+            }
+            Ok(AnnotationBody::ImplInvariant(body))
+        }
+    }
+}
+
+fn require_fragments(
+    fragments: &[LeanFragment],
     path: &str,
     annotation_name: &'static str,
     section_name: &'static str,
 ) -> Result<(), Error> {
-    if annotation.sections.iter().any(|candidate| candidate.kind == section) {
+    if !fragments.is_empty() {
         Ok(())
     } else {
         Err(Error::MissingRequiredSection {
@@ -300,6 +451,20 @@ fn require_section(
             annotation: annotation_name,
             section: section_name,
         })
+    }
+}
+
+impl AnnotationBody {
+    fn annotation_kind_str(&self) -> &'static str {
+        match self {
+            Self::Function(function) => match function.kind {
+                FunctionAnnotationKind::Spec => "spec",
+                FunctionAnnotationKind::UnsafeAxiom => "unsafe_axiom",
+            },
+            Self::TypeInvariant(_) => "type_invariant",
+            Self::TraitInvariant(_) => "trait_invariant",
+            Self::ImplInvariant(_) => "impl_invariant",
+        }
     }
 }
 
@@ -312,6 +477,26 @@ impl AnnotationKind {
             Self::TraitInvariant => "trait_invariant",
             Self::ImplInvariant => "impl_invariant",
         }
+    }
+}
+
+impl SectionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Context => "context",
+            Self::Requires => "requires",
+            Self::Ensures => "ensures",
+            Self::ProofContext => "proof_context",
+            Self::Proof => "proof",
+            Self::IsValid => "is_valid",
+            Self::IsSafe => "is_safe",
+        }
+    }
+}
+
+impl AnnotationSection {
+    fn fragment(&self) -> LeanFragment {
+        LeanFragment { name: self.name.clone(), lean: self.lean.clone() }
     }
 }
 
@@ -370,6 +555,10 @@ mod tests {
             is_unsafe_function: Some(is_unsafe),
             is_opaque_function: Some(is_opaque),
         }
+    }
+
+    fn section(kind: SectionKind, name: Option<&str>, lean: &str) -> AnnotationSection {
+        AnnotationSection { kind, name: name.map(str::to_string), lean: lean.to_string() }
     }
 
     #[test]
@@ -495,5 +684,69 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, Error::InvalidItemKind { .. }));
+    }
+
+    #[test]
+    fn groups_function_sections_by_lean_insertion_point() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::Spec,
+            sections: vec![
+                section(SectionKind::Context, None, "open scoped BigOperators"),
+                section(SectionKind::Requires, Some("h_pre"), "x.val + y.val <= U32.max"),
+                section(SectionKind::Ensures, Some("h_post"), "ret.val = x.val + y.val"),
+                section(SectionKind::ProofContext, None, "have h_comm := Nat.add_comm x.val y.val"),
+                section(SectionKind::Proof, Some("h_post"), "rw [h_comm]"),
+            ],
+        };
+        let AnnotationBody::Function(body) = annotation_body(&annotation, "crate::add").unwrap()
+        else {
+            panic!("expected function body");
+        };
+
+        assert_eq!(body.kind, FunctionAnnotationKind::Spec);
+        assert_eq!(body.context[0].lean, "open scoped BigOperators");
+        assert_eq!(body.requires[0].name.as_deref(), Some("h_pre"));
+        assert_eq!(body.requires[0].lean, "x.val + y.val <= U32.max");
+        assert_eq!(body.ensures[0].lean, "ret.val = x.val + y.val");
+        assert_eq!(body.proof_context[0].lean, "have h_comm := Nat.add_comm x.val y.val");
+        assert_eq!(body.proofs[0].lean, "rw [h_comm]");
+    }
+
+    #[test]
+    fn rejects_invalid_section_for_annotation_kind() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::UnsafeAxiom,
+            sections: vec![section(SectionKind::Proof, Some("h_post"), "simp")],
+        };
+        let err = validate_annotation(
+            &annotation,
+            function_facts(true, true),
+            &["crate".into(), "axiom".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::InvalidSection { .. }));
+    }
+
+    #[test]
+    fn groups_type_invariant_sections() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::TypeInvariant,
+            sections: vec![
+                section(SectionKind::Context, None, "open Anneal"),
+                section(SectionKind::IsValid, None, "fun self => self.val > 0"),
+            ],
+        };
+        let AnnotationBody::TypeInvariant(body) =
+            annotation_body(&annotation, "crate::NonZero").unwrap()
+        else {
+            panic!("expected type invariant body");
+        };
+
+        assert_eq!(body.context[0].lean, "open Anneal");
+        assert_eq!(body.is_valid[0].lean, "fun self => self.val > 0");
     }
 }
