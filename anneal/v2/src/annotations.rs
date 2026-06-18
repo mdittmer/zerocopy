@@ -26,6 +26,8 @@ pub struct Annotation {
     pub version: u32,
     pub kind: AnnotationKind,
     pub sections: Vec<AnnotationSection>,
+    #[serde(default)]
+    pub argument_names: Option<Vec<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Deserialize, serde::Serialize)]
@@ -663,6 +665,7 @@ mod tests {
                 name: Some("value".into()),
                 lean: "ret = 7".into(),
             }],
+            argument_names: None,
         };
         let err = validate_annotation(
             &annotation,
@@ -684,6 +687,7 @@ mod tests {
                 name: Some("value".into()),
                 lean: "ret = 7".into(),
             }],
+            argument_names: None,
         };
         let err = validate_annotation(
             &annotation,
@@ -705,6 +709,7 @@ mod tests {
                 name: Some("pre".into()),
                 lean: "x > 0".into(),
             }],
+            argument_names: None,
         };
         let err = validate_annotation(
             &annotation,
@@ -718,8 +723,12 @@ mod tests {
 
     #[test]
     fn type_invariant_requires_is_valid_section() {
-        let annotation =
-            Annotation { version: 1, kind: AnnotationKind::TypeInvariant, sections: vec![] };
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::TypeInvariant,
+            sections: vec![],
+            argument_names: None,
+        };
         let err = validate_annotation(
             &annotation,
             ItemFacts::plain(AnnotatedItemKind::Type),
@@ -732,7 +741,12 @@ mod tests {
 
     #[test]
     fn rejects_annotation_on_wrong_item_kind() {
-        let annotation = Annotation { version: 1, kind: AnnotationKind::Spec, sections: vec![] };
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::Spec,
+            sections: vec![],
+            argument_names: None,
+        };
         let err = validate_annotation(
             &annotation,
             ItemFacts::plain(AnnotatedItemKind::Type),
@@ -755,6 +769,7 @@ mod tests {
                 section(SectionKind::ProofContext, None, "have h_comm := Nat.add_comm x.val y.val"),
                 section(SectionKind::Proof, Some("h_post"), "rw [h_comm]"),
             ],
+            argument_names: None,
         };
         let AnnotationBody::Function(body) = annotation_body(&annotation, "crate::add").unwrap()
         else {
@@ -776,6 +791,7 @@ mod tests {
             version: 1,
             kind: AnnotationKind::UnsafeAxiom,
             sections: vec![section(SectionKind::Proof, Some("h_post"), "simp")],
+            argument_names: None,
         };
         let err = validate_annotation(
             &annotation,
@@ -796,6 +812,7 @@ mod tests {
                 section(SectionKind::Context, None, "open Anneal"),
                 section(SectionKind::IsValid, None, "fun self => self.val > 0"),
             ],
+            argument_names: None,
         };
         let AnnotationBody::TypeInvariant(body) =
             annotation_body(&annotation, "crate::NonZero").unwrap()
@@ -823,6 +840,7 @@ mod tests {
             version: 1,
             kind: AnnotationKind::Spec,
             sections: vec![section(SectionKind::Requires, Some("h_pre"), "x > 0")],
+            argument_names: Some(vec!["x".into()]),
         };
         let body = validate_annotation(
             &annotation,
@@ -846,6 +864,7 @@ mod tests {
         assert_eq!(value["artifact"]["target_kind"], "Lib");
         assert!(value["artifact"]["llbc_file"].as_str().unwrap().ends_with(".llbc"));
         assert_eq!(value["items"][0]["item_kind"], "function");
+        assert_eq!(value["items"][0]["annotation"]["argument_names"], serde_json::json!(["x"]));
         assert_eq!(value["items"][0]["body"]["function"]["requires"][0]["name"], "h_pre");
         assert_eq!(value["items"][0]["body"]["function"]["requires"][0]["lean"], "x > 0");
     }

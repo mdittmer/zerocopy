@@ -10,8 +10,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 use syn::{
-    Expr, ExprLit, Lit, LitStr, Meta, MetaList, MetaNameValue, Token, parse::Parser as _,
-    punctuated::Punctuated,
+    Expr, ExprLit, FnArg, Lit, LitStr, Meta, MetaList, MetaNameValue, Pat, PatIdent, Signature,
+    Token, parse::Parser as _, punctuated::Punctuated,
 };
 
 const METADATA_PREFIX: &str = "anneal:v2:";
@@ -249,7 +249,20 @@ fn expand_item(
     sections: Vec<Section>,
     item: proc_macro2::TokenStream,
 ) -> proc_macro2::TokenStream {
-    let metadata = LitStr::new(&metadata_json(kind, &sections), proc_macro2::Span::call_site());
+    let argument_names = match argument_names_for_item(kind, item.clone()) {
+        Ok(argument_names) => argument_names,
+        Err(err) => {
+            let compile_error = err.to_compile_error();
+            return quote! {
+                #compile_error
+                #item
+            };
+        }
+    };
+    let metadata = LitStr::new(
+        &metadata_json(kind, &sections, argument_names.as_deref()),
+        proc_macro2::Span::call_site(),
+    );
     let opaque = kind.injects_opacity().then(|| quote!(#[aeneas::opaque]));
     quote! {
         #opaque
@@ -258,7 +271,52 @@ fn expand_item(
     }
 }
 
-fn metadata_json(kind: AnnotationKind, sections: &[Section]) -> String {
+fn argument_names_for_item(
+    kind: AnnotationKind,
+    item: proc_macro2::TokenStream,
+) -> syn::Result<Option<Vec<String>>> {
+    if !matches!(kind, AnnotationKind::Spec | AnnotationKind::UnsafeAxiom) {
+        return Ok(None);
+    }
+
+    if let Ok(item_fn) = syn::parse2::<syn::ItemFn>(item.clone()) {
+        return argument_names_for_signature(&item_fn.sig).map(Some);
+    }
+    if let Ok(impl_fn) = syn::parse2::<syn::ImplItemFn>(item.clone()) {
+        return argument_names_for_signature(&impl_fn.sig).map(Some);
+    }
+    if let Ok(trait_fn) = syn::parse2::<syn::TraitItemFn>(item.clone()) {
+        return argument_names_for_signature(&trait_fn.sig).map(Some);
+    }
+    if let Ok(foreign_fn) = syn::parse2::<syn::ForeignItemFn>(item) {
+        return argument_names_for_signature(&foreign_fn.sig).map(Some);
+    }
+
+    Ok(None)
+}
+
+fn argument_names_for_signature(sig: &Signature) -> syn::Result<Vec<String>> {
+    sig.inputs.iter().map(argument_name).collect()
+}
+
+fn argument_name(arg: &FnArg) -> syn::Result<String> {
+    match arg {
+        FnArg::Receiver(_) => Ok("self".to_string()),
+        FnArg::Typed(typed) => match typed.pat.as_ref() {
+            Pat::Ident(PatIdent { ident, .. }) => Ok(ident.to_string()),
+            pat => Err(syn::Error::new_spanned(
+                pat,
+                "Anneal requires annotated function parameters to be named identifiers",
+            )),
+        },
+    }
+}
+
+fn metadata_json(
+    kind: AnnotationKind,
+    sections: &[Section],
+    argument_names: Option<&[String]>,
+) -> String {
     let sections = sections
         .iter()
         .map(|section| {
@@ -276,6 +334,7 @@ fn metadata_json(kind: AnnotationKind, sections: &[Section]) -> String {
             "version": 1,
             "kind": kind.as_str(),
             "sections": sections,
+            "argument_names": argument_names,
         })
     )
 }
@@ -329,12 +388,13 @@ mod tests {
                 is_valid = "self.val > 0"
             },
         );
-        let metadata = metadata_json(AnnotationKind::TypeInvariant, &sections);
+        let metadata = metadata_json(AnnotationKind::TypeInvariant, &sections, None);
         let payload = metadata.strip_prefix(METADATA_PREFIX).unwrap();
         let value: serde_json::Value = serde_json::from_str(payload).unwrap();
 
         assert_eq!(value["version"], 1);
         assert_eq!(value["kind"], "type_invariant");
+        assert_eq!(value["argument_names"], serde_json::Value::Null);
         assert_eq!(value["sections"][0]["kind"], "is_valid");
         assert_eq!(value["sections"][0]["lean"], "self.val > 0");
     }
@@ -358,6 +418,38 @@ mod tests {
         assert!(text.contains("aeneas :: opaque"));
         assert!(text.contains("anneal:v2:"));
         assert!(text.contains("pub unsafe fn read"));
+    }
+
+    #[test]
+    fn records_free_function_argument_names() {
+        let names = argument_names_for_item(
+            AnnotationKind::Spec,
+            quote! {
+                pub unsafe fn read(ptr: *const u8, len: usize) -> u8 { 0 }
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert_eq!(names, ["ptr", "len"]);
+    }
+
+    #[test]
+    fn records_impl_method_receiver_argument_name() {
+        let names = argument_names_for_item(
+            AnnotationKind::Spec,
+            quote! {
+                pub fn add(&mut self, x: u32) -> u32 { self.val + x }
+            },
+        )
+        .unwrap()
+        .unwrap();
+        let metadata = metadata_json(AnnotationKind::Spec, &[], Some(&names));
+        let payload = metadata.strip_prefix(METADATA_PREFIX).unwrap();
+        let value: serde_json::Value = serde_json::from_str(payload).unwrap();
+
+        assert_eq!(names, ["self", "x"]);
+        assert_eq!(value["argument_names"], serde_json::json!(["self", "x"]));
     }
 
     #[test]
