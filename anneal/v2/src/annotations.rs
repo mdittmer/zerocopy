@@ -159,8 +159,6 @@ pub enum Error {
     RequiresSafeFunction { path: String },
     #[error("`#[anneal::{annotation}]` on `{path}` is missing a `{section}` section")]
     MissingRequiredSection { path: String, annotation: &'static str, section: &'static str },
-    #[error("`#[anneal::impl_invariant]` on `{path}` is parsed but not supported yet")]
-    ImplInvariantUnsupported { path: String },
 }
 
 pub fn extract_crate_annotations(
@@ -397,9 +395,7 @@ fn validate_annotation(
         (AnnotationBody::TraitInvariant(tr), Trait) => {
             require_fragments(&tr.is_safe, &path, "trait_invariant", "is_safe")?;
         }
-        (AnnotationBody::ImplInvariant(_), Impl) => {
-            return Err(Error::ImplInvariantUnsupported { path });
-        }
+        (AnnotationBody::ImplInvariant(_), Impl) => {}
         (body, item_kind) => {
             return Err(Error::InvalidItemKind {
                 path,
@@ -760,6 +756,28 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, Error::MissingRequiredSection { .. }));
+    }
+
+    #[test]
+    fn impl_invariant_is_valid_on_impl_items() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::ImplInvariant,
+            sections: vec![section(SectionKind::Context, None, "def implContext : Prop := True")],
+            argument_names: None,
+        };
+
+        let body = validate_annotation(
+            &annotation,
+            ItemFacts::plain(AnnotatedItemKind::Impl),
+            &["crate".into(), "{impl}".into()],
+        )
+        .unwrap();
+
+        let AnnotationBody::ImplInvariant(body) = body else {
+            panic!("expected impl invariant body");
+        };
+        assert_eq!(body.context[0].lean, "def implContext : Prop := True");
     }
 
     #[test]

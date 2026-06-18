@@ -15,8 +15,6 @@ use charon_lib::ast::{
 pub enum Error {
     #[error("missing {kind} declaration {index} in LLBC")]
     MissingDecl { kind: &'static str, index: usize },
-    #[error("`#[anneal::{annotation}]` Lean generation is not implemented yet for `{path}`")]
-    UnsupportedAnnotation { annotation: &'static str, path: String },
     #[error("generic `{path}` is not supported by this Lean generation unit yet")]
     UnsupportedGenerics { path: String },
     #[error("missing argument name for argument {index} of `{path}`")]
@@ -124,12 +122,7 @@ fn render_item(
             let spec = function_spec(krate, fun, item, function)?;
             render_function(&spec, out);
         }
-        crate::annotations::AnnotationBody::ImplInvariant(_) => {
-            return Err(Error::UnsupportedAnnotation {
-                annotation: "impl_invariant",
-                path: item.path.join("::"),
-            });
-        }
+        crate::annotations::AnnotationBody::ImplInvariant(_) => {}
     }
     Ok(())
 }
@@ -786,8 +779,9 @@ mod tests {
     use charon_lib::ast::{GenericParams, TranslatedCrate, TypeParam, TypeVarId};
 
     use crate::annotations::{
-        FunctionAnnotation, FunctionAnnotationKind, LeanFragment, TraitInvariantAnnotation,
-        TypeInvariantAnnotation,
+        AnnotatedItem, AnnotatedItemId, AnnotatedItemKind, Annotation, AnnotationBody,
+        AnnotationKind, FunctionAnnotation, FunctionAnnotationKind, ImplInvariantAnnotation,
+        LeanFragment, TraitInvariantAnnotation, TypeInvariantAnnotation,
     };
 
     use super::*;
@@ -1119,5 +1113,28 @@ mod tests {
         assert!(out.contains("  · rintro x' h_returns\n"));
         assert!(out.contains("        h_x'_is_valid := by\n"));
         assert!(out.contains("        result := by\n          simp_all [keep_mut]\n"));
+    }
+
+    #[test]
+    fn skips_impl_invariants_without_specs_output() {
+        let item = AnnotatedItem {
+            item_id: AnnotatedItemId { kind: AnnotatedItemKind::Impl, index: 0 },
+            item_kind: AnnotatedItemKind::Impl,
+            path: vec!["test_impl".to_string(), "{impl}".to_string()],
+            annotation: Annotation {
+                version: 1,
+                kind: AnnotationKind::ImplInvariant,
+                sections: Vec::new(),
+                argument_names: None,
+            },
+            body: AnnotationBody::ImplInvariant(ImplInvariantAnnotation {
+                context: vec![fragment("def implContext : Prop := True")],
+            }),
+        };
+        let mut out = String::new();
+
+        render_item(&TranslatedCrate::default(), &item, &mut out).unwrap();
+
+        assert!(out.is_empty());
     }
 }
