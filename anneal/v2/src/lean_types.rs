@@ -3,9 +3,9 @@
 #![allow(dead_code)]
 
 use charon_lib::ast::{
-    BuiltinTy, ConstantExpr, ConstantExprKind, DeBruijnVar, GenericArgs, GenericParams, ItemId,
-    Literal, LiteralTy, Name, PathElem, RefKind, ScalarValue, TranslatedCrate, Ty, TyKind,
-    TypeDeclId, TypeDeclRef, TypeId, TypeVarId,
+    BuiltinTy, ConstGenericVarId, ConstantExpr, ConstantExprKind, DeBruijnVar, GenericArgs,
+    GenericParams, ItemId, Literal, LiteralTy, Name, PathElem, RefKind, ScalarValue,
+    TranslatedCrate, Ty, TyKind, TypeDeclId, TypeDeclRef, TypeId, TypeVarId,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -56,7 +56,7 @@ fn render_type_with_ctx(
         TyKind::Array(inner, len) => Ok(format!(
             "(Array {} {})",
             render_type_with_ctx(krate, ctx, inner)?,
-            render_const_expr(len)?
+            render_const_expr(ctx, len)?
         )),
         TyKind::Slice(inner) => Ok(format!("(Slice {})", render_type_with_ctx(krate, ctx, inner)?)),
         TyKind::Pattern(inner, _) => render_type_with_ctx(krate, ctx, inner),
@@ -105,7 +105,7 @@ fn render_type_app(
     name: &str,
     generics: &GenericArgs,
 ) -> Result<String, Error> {
-    let args = render_type_args(krate, ctx, generics)?;
+    let args = render_generic_args(krate, ctx, generics)?;
     if args.is_empty() { Ok(name.to_string()) } else { Ok(format!("({name} {})", args.join(" "))) }
 }
 
@@ -128,6 +128,22 @@ fn render_type_args(
     generics: &GenericArgs,
 ) -> Result<Vec<String>, Error> {
     generics.types.iter().map(|ty| render_type_with_ctx(krate, ctx, ty)).collect()
+}
+
+fn render_generic_args(
+    krate: &TranslatedCrate,
+    ctx: &TypeContext<'_>,
+    generics: &GenericArgs,
+) -> Result<Vec<String>, Error> {
+    let mut args = render_type_args(krate, ctx, generics)?;
+    args.extend(
+        generics
+            .const_generics
+            .iter()
+            .map(|const_expr| render_const_expr(ctx, const_expr))
+            .collect::<Result<Vec<_>, _>>()?,
+    );
+    Ok(args)
 }
 
 fn render_type_var(
@@ -173,7 +189,7 @@ fn render_literal_type(literal: LiteralTy) -> &'static str {
     }
 }
 
-fn render_const_expr(expr: &ConstantExpr) -> Result<String, Error> {
+fn render_const_expr(ctx: &TypeContext<'_>, expr: &ConstantExpr) -> Result<String, Error> {
     match &expr.kind {
         ConstantExprKind::Literal(Literal::Scalar(ScalarValue::Unsigned(_, value))) => {
             Ok(value.to_string())
@@ -181,8 +197,23 @@ fn render_const_expr(expr: &ConstantExpr) -> Result<String, Error> {
         ConstantExprKind::Literal(Literal::Scalar(ScalarValue::Signed(_, value))) => {
             Ok(value.to_string())
         }
+        ConstantExprKind::Var(const_var) => render_const_var(ctx, *const_var),
         _ => Err(Error::UnsupportedConstant),
     }
+}
+
+fn render_const_var(
+    ctx: &TypeContext<'_>,
+    const_var: DeBruijnVar<ConstGenericVarId>,
+) -> Result<String, Error> {
+    let const_id = match const_var {
+        DeBruijnVar::Free(const_id) => const_id,
+        DeBruijnVar::Bound(db, const_id) if db.index == 0 => const_id,
+        DeBruijnVar::Bound(_, _) => return Err(Error::UnsupportedConstant),
+    };
+    let params = ctx.generics.ok_or(Error::UnsupportedConstant)?;
+    let param = params.const_generics.get(const_id).ok_or(Error::UnsupportedConstant)?;
+    Ok(crate::names::lean_identifier(&param.name))
 }
 
 fn last_ident_segment(name: &Name) -> Option<String> {
@@ -203,9 +234,10 @@ fn last_ident_segment(name: &Name) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use charon_lib::ast::{
-        ConstantExpr, ConstantExprKind, DeBruijnVar, GenericArgs, GenericParams, HashConsed,
-        ItemId, Literal, LiteralTy, Name, PathElem, RefKind, Region, ScalarValue, TranslatedCrate,
-        Ty, TyKind, TypeDeclId, TypeDeclRef, TypeId, TypeParam, TypeVarId, UIntTy,
+        ConstGenericParam, ConstGenericVarId, ConstantExpr, ConstantExprKind, DeBruijnVar,
+        GenericArgs, GenericParams, HashConsed, ItemId, Literal, LiteralTy, Name, PathElem,
+        RefKind, Region, ScalarValue, TranslatedCrate, Ty, TyKind, TypeDeclId, TypeDeclRef, TypeId,
+        TypeParam, TypeVarId, UIntTy,
     };
 
     use super::*;
@@ -223,20 +255,42 @@ mod tests {
     }
 
     fn args(types: Vec<Ty>) -> Box<GenericArgs> {
+        args_with_consts(types, Vec::new())
+    }
+
+    fn args_with_consts(types: Vec<Ty>, const_generics: Vec<ConstantExpr>) -> Box<GenericArgs> {
         Box::new(GenericArgs {
             regions: Default::default(),
             types: types.into(),
-            const_generics: Default::default(),
+            const_generics: const_generics.into(),
             trait_refs: Default::default(),
         })
     }
 
     fn params(types: Vec<TypeParam>) -> GenericParams {
-        GenericParams { types: types.into(), ..Default::default() }
+        params_with_consts(types, Vec::new())
+    }
+
+    fn params_with_consts(
+        types: Vec<TypeParam>,
+        const_generics: Vec<ConstGenericParam>,
+    ) -> GenericParams {
+        GenericParams {
+            types: types.into(),
+            const_generics: const_generics.into(),
+            ..Default::default()
+        }
     }
 
     fn type_var() -> Ty {
         ty(TyKind::TypeVar(DeBruijnVar::Free(TypeVarId::ZERO)))
+    }
+
+    fn const_var() -> ConstantExpr {
+        ConstantExpr {
+            kind: ConstantExprKind::Var(DeBruijnVar::Free(ConstGenericVarId::ZERO)),
+            ty: uint(UIntTy::Usize),
+        }
     }
 
     fn tuple(types: Vec<Ty>) -> Ty {
@@ -333,5 +387,56 @@ mod tests {
         }));
 
         assert_eq!(render_type_with_generics(&krate, &generics, &wrapper).unwrap(), "(Wrapper T)");
+    }
+
+    #[test]
+    fn renders_const_generic_variables() {
+        let krate = TranslatedCrate::default();
+        let generics = params_with_consts(
+            Vec::new(),
+            vec![ConstGenericParam::new(
+                ConstGenericVarId::ZERO,
+                "N".to_string(),
+                uint(UIntTy::Usize),
+            )],
+        );
+        let array = ty(TyKind::Array(uint(UIntTy::U8), Box::new(const_var())));
+
+        assert_eq!(
+            render_type_with_generics(&krate, &generics, &array).unwrap(),
+            "(Array Std.U8 N)"
+        );
+    }
+
+    #[test]
+    fn renders_named_adts_with_type_and_const_arguments() {
+        let type_id = TypeDeclId::ZERO;
+        let mut krate = TranslatedCrate::default();
+        krate.item_names.insert(
+            ItemId::Type(type_id),
+            Name {
+                name: vec![
+                    PathElem::Ident("crate".to_string(), Default::default()),
+                    PathElem::Ident("ConstWrapper".to_string(), Default::default()),
+                ],
+            },
+        );
+        let generics = params_with_consts(
+            vec![TypeParam::new(TypeVarId::ZERO, "T".to_string())],
+            vec![ConstGenericParam::new(
+                ConstGenericVarId::ZERO,
+                "N".to_string(),
+                uint(UIntTy::Usize),
+            )],
+        );
+        let wrapper = ty(TyKind::Adt(TypeDeclRef {
+            id: TypeId::Adt(type_id),
+            generics: args_with_consts(vec![type_var()], vec![const_var()]),
+        }));
+
+        assert_eq!(
+            render_type_with_generics(&krate, &generics, &wrapper).unwrap(),
+            "(ConstWrapper T N)"
+        );
     }
 }

@@ -101,7 +101,7 @@ fn render_item(
                 .type_decls
                 .get(type_id)
                 .ok_or(Error::MissingDecl { kind: "type", index: item.item_id.index })?;
-            let generics = lean_generics(&ty.generics, &item.path.join("::"))?;
+            let generics = lean_generics(krate, &ty.generics, &item.path.join("::"))?;
             let path = crate::names::item_path(krate, &ty.item_meta.name)?;
             render_type_invariant(&path, &generics, body, out);
         }
@@ -111,7 +111,7 @@ fn render_item(
                 .trait_decls
                 .get(trait_id)
                 .ok_or(Error::MissingDecl { kind: "trait", index: item.item_id.index })?;
-            let generics = lean_trait_generics(&tr.generics, &item.path.join("::"))?;
+            let generics = lean_trait_generics(krate, &tr.generics, &item.path.join("::"))?;
             let path = crate::names::item_path(krate, &tr.item_meta.name)?;
             render_trait_invariant(&path, &generics, body, out);
         }
@@ -171,7 +171,7 @@ fn function_spec<'a>(
     annotation: &'a crate::annotations::FunctionAnnotation,
 ) -> Result<FunctionSpec<'a>, Error> {
     let path = item.path.join("::");
-    let generics = lean_generics(&fun.generics, &path)?;
+    let generics = lean_generics(krate, &fun.generics, &path)?;
     let item_path = crate::names::item_path(krate, &fun.item_meta.name)?;
     let args = function_args(krate, fun, item)?;
     let return_type = if is_unit_type(&fun.signature.output) {
@@ -237,13 +237,21 @@ fn function_args(
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct LeanGenerics {
     type_params: Vec<String>,
+    const_params: Vec<LeanConstGeneric>,
 }
 
-fn lean_generics(params: &GenericParams, path: &str) -> Result<LeanGenerics, Error> {
-    if !params.const_generics.is_empty()
-        || !params.trait_clauses.is_empty()
-        || !params.trait_type_constraints.is_empty()
-    {
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LeanConstGeneric {
+    name: String,
+    lean_type: String,
+}
+
+fn lean_generics(
+    krate: &charon_lib::ast::TranslatedCrate,
+    params: &GenericParams,
+    path: &str,
+) -> Result<LeanGenerics, Error> {
+    if !params.trait_clauses.is_empty() || !params.trait_type_constraints.is_empty() {
         return Err(Error::UnsupportedGenerics { path: path.to_string() });
     }
     Ok(LeanGenerics {
@@ -252,11 +260,27 @@ fn lean_generics(params: &GenericParams, path: &str) -> Result<LeanGenerics, Err
             .iter()
             .map(|param| crate::names::lean_identifier(&param.name))
             .collect(),
+        const_params: params
+            .const_generics
+            .iter()
+            .map(|param| {
+                Ok(LeanConstGeneric {
+                    name: crate::names::lean_identifier(&param.name),
+                    lean_type: crate::lean_types::render_type_with_generics(
+                        krate, params, &param.ty,
+                    )?,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?,
     })
 }
 
-fn lean_trait_generics(params: &GenericParams, path: &str) -> Result<LeanGenerics, Error> {
-    let mut generics = lean_generics(params, path)?;
+fn lean_trait_generics(
+    krate: &charon_lib::ast::TranslatedCrate,
+    params: &GenericParams,
+    path: &str,
+) -> Result<LeanGenerics, Error> {
+    let mut generics = lean_generics(krate, params, path)?;
     if generics.type_params.first().map(String::as_str) == Some("Self") {
         generics.type_params.remove(0);
     }
@@ -470,6 +494,12 @@ fn push_arg_binders(out: &mut String, args: &[FunctionArg]) {
 fn function_call(spec: &FunctionSpec<'_>) -> String {
     let mut parts = vec![spec.path.item.clone()];
     parts.extend(spec.generics.type_params.iter().map(|param| format!("({param} := {param})")));
+    parts.extend(
+        spec.generics
+            .const_params
+            .iter()
+            .map(|param| format!("({} := {})", param.name, param.name)),
+    );
     parts.extend(spec.args.iter().map(|arg| arg.name.clone()));
     parts.join(" ")
 }
@@ -477,6 +507,9 @@ fn function_call(spec: &FunctionSpec<'_>) -> String {
 fn push_generic_binders(out: &mut String, generics: &LeanGenerics) {
     for param in &generics.type_params {
         out.push_str(&format!(" {{{param} : Type}}"));
+    }
+    for param in &generics.const_params {
+        out.push_str(&format!(" {{{} : {}}}", param.name, param.lean_type));
     }
 }
 
@@ -596,11 +629,8 @@ fn render_type_invariant(
 }
 
 fn type_application(name: &str, generics: &LeanGenerics) -> String {
-    if generics.type_params.is_empty() {
-        name.to_string()
-    } else {
-        format!("({name} {})", generics.type_params.join(" "))
-    }
+    let args = generic_argument_names(generics);
+    if args.is_empty() { name.to_string() } else { format!("({name} {})", args.join(" ")) }
 }
 
 fn render_trait_invariant(
@@ -621,8 +651,17 @@ fn render_trait_invariant(
 
 fn trait_application(name: &str, generics: &LeanGenerics) -> String {
     let mut args = vec!["Self".to_string()];
-    args.extend(generics.type_params.iter().cloned());
+    args.extend(generic_argument_names(generics));
     format!("{name} {}", args.join(" "))
+}
+
+fn generic_argument_names(generics: &LeanGenerics) -> Vec<String> {
+    generics
+        .type_params
+        .iter()
+        .cloned()
+        .chain(generics.const_params.iter().map(|param| param.name.clone()))
+        .collect()
 }
 
 fn render_namespace_open(path: &crate::names::LeanItemPath, out: &mut String) {
@@ -674,7 +713,7 @@ fn push_with_trailing_newline(out: &mut String, lean: &str) {
 
 #[cfg(test)]
 mod tests {
-    use charon_lib::ast::{GenericParams, TypeParam, TypeVarId};
+    use charon_lib::ast::{GenericParams, TranslatedCrate, TypeParam, TypeVarId};
 
     use crate::annotations::{
         FunctionAnnotation, FunctionAnnotationKind, LeanFragment, TraitInvariantAnnotation,
@@ -742,7 +781,9 @@ mod tests {
 
     #[test]
     fn drops_charon_synthetic_self_from_trait_generics() {
-        let generics = lean_trait_generics(&generic_params(&["Self", "T"]), "SafeTrait").unwrap();
+        let krate = TranslatedCrate::default();
+        let generics =
+            lean_trait_generics(&krate, &generic_params(&["Self", "T"]), "SafeTrait").unwrap();
 
         assert_eq!(generics.type_params, ["T"]);
     }
@@ -818,7 +859,8 @@ mod tests {
     fn renders_type_parameter_binders_and_applications() {
         let type_body =
             TypeInvariantAnnotation { context: Vec::new(), is_valid: vec![fragment("True")] };
-        let generics = LeanGenerics { type_params: vec!["T".to_string()] };
+        let generics =
+            LeanGenerics { type_params: vec!["T".to_string()], const_params: Vec::new() };
         let mut out = String::new();
 
         render_type_invariant(&path("Wrapper"), &generics, &type_body, &mut out);
@@ -831,6 +873,23 @@ mod tests {
 
         assert!(out.contains(
             "class Safe (Self : Type) {T : Type} (inst : SafeTrait Self T) : Prop where\n"
+        ));
+
+        let const_generics = LeanGenerics {
+            type_params: vec!["T".to_string()],
+            const_params: vec![LeanConstGeneric {
+                name: "N".to_string(),
+                lean_type: "Std.Usize".to_string(),
+            }],
+        };
+        render_type_invariant(&path("ConstWrapper"), &const_generics, &type_body, &mut out);
+        render_trait_invariant(&path("ConstSafeTrait"), &const_generics, &trait_body, &mut out);
+
+        assert!(out.contains(
+            "instance {T : Type} {N : Std.Usize} : Anneal.IsValid (ConstWrapper T N) where\n"
+        ));
+        assert!(out.contains(
+            "class Safe (Self : Type) {T : Type} {N : Std.Usize} (inst : ConstSafeTrait Self T N) : Prop where\n"
         ));
 
         let annotation = FunctionAnnotation {
