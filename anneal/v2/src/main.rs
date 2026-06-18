@@ -15,6 +15,7 @@ mod annotations;
 mod charon;
 mod diagnostics;
 mod lean;
+mod lean_types;
 mod names;
 mod resolve;
 mod scanner;
