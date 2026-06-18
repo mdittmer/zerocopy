@@ -42,12 +42,15 @@ pub fn write_workspace(
     std::fs::write(lean_root.join("lakefile.lean"), lakefile(toolchain, &modules)?).with_context(
         || format!("failed to write `{}`", lean_root.join("lakefile.lean").display()),
     )?;
+    std::fs::write(lean_root.join("lake-manifest.json"), lake_manifest(toolchain)?).with_context(
+        || format!("failed to write `{}`", lean_root.join("lake-manifest.json").display()),
+    )?;
 
     Ok(lean_root)
 }
 
 fn generated_modules(artifacts: &[crate::aeneas::LeanArtifact]) -> Vec<String> {
-    let mut modules = vec!["Generated".to_string()];
+    let mut modules = vec!["Generated".to_string(), "Anneal".to_string()];
     for artifact in artifacts {
         let slug = artifact.artifact.artifact_slug();
         for stem in ["Funs", "Types", "FunsExternal", "TypesExternal", "Specs"] {
@@ -88,6 +91,66 @@ lean_lib Generated where
     ))
 }
 
+fn lake_manifest(toolchain: &crate::setup::Toolchain) -> anyhow::Result<String> {
+    let aeneas_lean_dir = toolchain.aeneas_lean_dir();
+    let manifest_path = aeneas_lean_dir.join("lake-manifest.json");
+    let manifest: serde_json::Value = serde_json::from_reader(
+        std::fs::File::open(&manifest_path)
+            .with_context(|| format!("failed to open `{}`", manifest_path.display()))?,
+    )
+    .with_context(|| format!("failed to parse `{}`", manifest_path.display()))?;
+    let aeneas_packages = manifest
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .context("Aeneas Lake manifest is missing a packages array")?;
+
+    let mut packages = vec![serde_json::json!({
+        "type": "path",
+        "name": "aeneas",
+        "dir": aeneas_lean_dir,
+        "inherited": false,
+    })];
+    for entry in aeneas_packages {
+        let mut entry = entry
+            .as_object()
+            .cloned()
+            .context("Aeneas Lake manifest package entry is not an object")?;
+        let package_type =
+            entry.get("type").and_then(serde_json::Value::as_str).with_context(|| {
+                format!("Aeneas Lake manifest package entry is missing type: {entry:?}")
+            })?;
+        if package_type != "path" {
+            anyhow::bail!("Aeneas Lake manifest package entry is {package_type:?}, not a path");
+        }
+        let package_dir =
+            entry.get("dir").and_then(serde_json::Value::as_str).with_context(|| {
+                format!("Aeneas Lake manifest package entry is missing dir: {entry:?}")
+            })?;
+        let package_dir = std::path::Path::new(package_dir);
+        let package_dir = if package_dir.is_absolute() {
+            package_dir.to_path_buf()
+        } else {
+            aeneas_lean_dir.join(package_dir)
+        };
+        entry.insert("dir".to_string(), serde_json::json!(package_dir));
+        entry.insert("inherited".to_string(), serde_json::json!(true));
+        packages.push(serde_json::Value::Object(entry));
+    }
+
+    let manifest = serde_json::json!({
+        "version": "1.2.0",
+        "packagesDir": ".lake/packages",
+        "packages": packages,
+        "name": "anneal_verification",
+        "lakeDir": ".lake",
+        "fixedToolchain": false,
+    });
+    let mut json =
+        serde_json::to_string_pretty(&manifest).context("failed to serialize Lake manifest")?;
+    json.push('\n');
+    Ok(json)
+}
+
 fn lean_string(value: &str) -> String {
     serde_json::to_string(value).expect("serializing a string cannot fail")
 }
@@ -115,5 +178,37 @@ mod tests {
 
         assert!(content.contains("require aeneas from \"/toolchain/aeneas/backends/lean\""));
         assert!(content.contains("roots := #[`Generated, `Pkg.Funs]"));
+    }
+
+    #[test]
+    fn lake_manifest_reuses_aeneas_archive_packages() {
+        let temp = tempfile::tempdir().unwrap();
+        let toolchain = crate::setup::Toolchain::for_test(temp.path().join("toolchain"));
+        let aeneas_lean = toolchain.aeneas_lean_dir();
+        std::fs::create_dir_all(&aeneas_lean).unwrap();
+        std::fs::write(
+            aeneas_lean.join("lake-manifest.json"),
+            r#"{
+  "packages": [
+    {"type": "path", "name": "mathlib", "dir": "../packages/mathlib"}
+  ]
+}
+"#,
+        )
+        .unwrap();
+
+        let manifest = lake_manifest(&toolchain).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&manifest).unwrap();
+
+        assert_eq!(value["packages"][0]["name"], "aeneas");
+        assert_eq!(value["packages"][0]["inherited"], false);
+        assert_eq!(value["packages"][1]["name"], "mathlib");
+        assert_eq!(value["packages"][1]["inherited"], true);
+        assert!(
+            value["packages"][1]["dir"]
+                .as_str()
+                .unwrap()
+                .ends_with("aeneas/backends/lean/../packages/mathlib")
+        );
     }
 }

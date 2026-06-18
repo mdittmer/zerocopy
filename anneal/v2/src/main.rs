@@ -115,7 +115,7 @@ fn generate(args: ExpandArgs) -> anyhow::Result<()> {
         );
         println!("Lean workspace generated at: {}", lean_root.display());
         println!(
-            "Build with: cd {} && {} --keep-toolchain build",
+            "Build with: cd {} && {} --keep-toolchain --old build",
             lean_root.display(),
             crate::setup::Tool::Lake.path(toolchain).display()
         );
