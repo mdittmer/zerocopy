@@ -4,7 +4,11 @@
 //! Lean declarations Anneal owns. It does not parse the snippet contents.
 
 use anyhow::Context as _;
-use charon_lib::ast::{TraitDeclId, TypeDeclId};
+use std::collections::HashMap;
+
+use charon_lib::ast::{
+    Body, FunDecl, FunDeclId, Local, RefKind, TraitDeclId, Ty, TyKind, TypeDeclId, TypeId,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -14,8 +18,14 @@ pub enum Error {
     UnsupportedAnnotation { annotation: &'static str, path: String },
     #[error("generic `{path}` is not supported by this Lean generation unit yet")]
     UnsupportedGenerics { path: String },
+    #[error("missing argument name for argument {index} of `{path}`")]
+    MissingArgumentName { path: String, index: usize },
+    #[error("argument metadata for `{path}` has {names} name(s), but LLBC has {inputs} input(s)")]
+    ArgumentNameCountMismatch { path: String, names: usize, inputs: usize },
     #[error(transparent)]
     Name(#[from] crate::names::Error),
+    #[error(transparent)]
+    Type(#[from] crate::lean_types::Error),
 }
 
 pub fn write_specs(
@@ -109,13 +119,13 @@ fn render_item(
             render_trait_invariant(&path, body, out);
         }
         crate::annotations::AnnotationBody::Function(function) => {
-            return Err(Error::UnsupportedAnnotation {
-                annotation: match function.kind {
-                    crate::annotations::FunctionAnnotationKind::Spec => "spec",
-                    crate::annotations::FunctionAnnotationKind::UnsafeAxiom => "unsafe_axiom",
-                },
-                path: item.path.join("::"),
-            });
+            let fun_id = FunDeclId::from_usize(item.item_id.index);
+            let fun = krate
+                .fun_decls
+                .get(fun_id)
+                .ok_or(Error::MissingDecl { kind: "function", index: item.item_id.index })?;
+            let spec = function_spec(krate, fun, item, function)?;
+            render_function(&spec, out);
         }
         crate::annotations::AnnotationBody::ImplInvariant(_) => {
             return Err(Error::UnsupportedAnnotation {
@@ -125,6 +135,413 @@ fn render_item(
         }
     }
     Ok(())
+}
+
+#[derive(Debug)]
+struct FunctionArg {
+    name: String,
+    lean_type: String,
+    is_mut_ref: bool,
+}
+
+#[derive(Debug)]
+struct FunctionSpec<'a> {
+    path: crate::names::LeanItemPath,
+    args: Vec<FunctionArg>,
+    return_type: Option<String>,
+    annotation: &'a crate::annotations::FunctionAnnotation,
+}
+
+impl FunctionSpec<'_> {
+    fn mut_args(&self) -> impl Iterator<Item = &FunctionArg> {
+        self.args.iter().filter(|arg| arg.is_mut_ref)
+    }
+
+    fn aeneas_name(&self) -> String {
+        self.path.aeneas_name()
+    }
+
+    fn fully_qualified_aeneas_name(&self) -> String {
+        format!("_root_.{}", self.aeneas_name())
+    }
+}
+
+fn function_spec<'a>(
+    krate: &charon_lib::ast::TranslatedCrate,
+    fun: &FunDecl,
+    item: &crate::annotations::AnnotatedItem,
+    annotation: &'a crate::annotations::FunctionAnnotation,
+) -> Result<FunctionSpec<'a>, Error> {
+    let path = item.path.join("::");
+    if !fun.generics.types.is_empty()
+        || !fun.generics.const_generics.is_empty()
+        || !fun.generics.trait_clauses.is_empty()
+    {
+        return Err(Error::UnsupportedGenerics { path });
+    }
+    let item_path = crate::names::item_path(krate, &fun.item_meta.name)?;
+    let args = function_args(krate, fun, item)?;
+    let return_type = if is_unit_type(&fun.signature.output) {
+        None
+    } else {
+        Some(crate::lean_types::render_type(krate, &fun.signature.output)?)
+    };
+    Ok(FunctionSpec { path: item_path, args, return_type, annotation })
+}
+
+fn function_args(
+    krate: &charon_lib::ast::TranslatedCrate,
+    fun: &FunDecl,
+    item: &crate::annotations::AnnotatedItem,
+) -> Result<Vec<FunctionArg>, Error> {
+    let path = item.path.join("::");
+    let metadata_names = item.annotation.argument_names.as_deref();
+    if let Some(names) = metadata_names
+        && names.len() != fun.signature.inputs.len()
+    {
+        return Err(Error::ArgumentNameCountMismatch {
+            path,
+            names: names.len(),
+            inputs: fun.signature.inputs.len(),
+        });
+    }
+
+    let input_locals = body_input_locals(&fun.body);
+    if let Some(locals) = &input_locals
+        && locals.len() != fun.signature.inputs.len()
+    {
+        return Err(Error::ArgumentNameCountMismatch {
+            path,
+            names: locals.len(),
+            inputs: fun.signature.inputs.len(),
+        });
+    }
+
+    fun.signature
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(index, signature_ty)| {
+            let local = input_locals.as_ref().and_then(|locals| locals.get(index).copied());
+            let name = local
+                .and_then(|local| local.name.as_deref())
+                .or_else(|| metadata_names.and_then(|names| names.get(index).map(String::as_str)))
+                .ok_or_else(|| Error::MissingArgumentName { path: path.clone(), index })?;
+            let ty = local.map(|local| &local.ty).unwrap_or(signature_ty);
+            Ok(FunctionArg {
+                name: crate::names::lean_identifier(name),
+                lean_type: crate::lean_types::render_type(krate, ty)?,
+                is_mut_ref: is_mut_ref(ty),
+            })
+        })
+        .collect()
+}
+
+fn body_input_locals(body: &Body) -> Option<Vec<&Local>> {
+    match body {
+        Body::Structured(body) => {
+            Some(body.locals.locals.iter().skip(1).take(body.locals.arg_count).collect())
+        }
+        Body::Unstructured(body) => {
+            Some(body.locals.locals.iter().skip(1).take(body.locals.arg_count).collect())
+        }
+        _ => None,
+    }
+}
+
+fn is_mut_ref(ty: &Ty) -> bool {
+    matches!(ty.0.inner(), TyKind::Ref(_, _, RefKind::Mut))
+}
+
+fn is_unit_type(ty: &Ty) -> bool {
+    match ty.0.inner() {
+        TyKind::Adt(type_ref) => {
+            matches!(&type_ref.id, TypeId::Tuple) && type_ref.generics.types.is_empty()
+        }
+        _ => false,
+    }
+}
+
+fn render_function(spec: &FunctionSpec<'_>, out: &mut String) {
+    render_namespace_open(&spec.path, out);
+    render_context(&spec.annotation.context, out);
+    render_function_pre(spec, out);
+    render_function_post(spec, out);
+    render_function_spec(spec, out);
+    render_namespace_close(&spec.path, out);
+}
+
+fn render_function_pre(spec: &FunctionSpec<'_>, out: &mut String) {
+    if !function_has_pre(spec) {
+        return;
+    }
+    out.push_str("structure Pre");
+    push_arg_binders(out, &spec.args);
+    out.push_str(" : Prop where\n");
+    for arg in &spec.args {
+        let field = format!("h_{}_is_valid", arg.name);
+        out.push_str(&format!(
+            "  {field} : Anneal.IsValid.isValid {} := by verify_is_valid {field} {}\n",
+            arg.name,
+            spec.fully_qualified_aeneas_name()
+        ));
+    }
+    for fragment in &spec.annotation.requires {
+        let field = fragment.name.as_deref().unwrap_or("h_anon");
+        out.push_str(&format!("  {field} : "));
+        push_field_type(out, &fragment.lean);
+        out.push_str(&format!(
+            " := by verify_user_bound {field} {}\n",
+            spec.fully_qualified_aeneas_name()
+        ));
+    }
+    out.push('\n');
+}
+
+fn render_function_post(spec: &FunctionSpec<'_>, out: &mut String) {
+    out.push_str("structure Post");
+    push_arg_binders(out, &spec.args);
+    if let Some(return_type) = &spec.return_type {
+        out.push_str(&format!(" (ret : {return_type})"));
+    }
+    for arg in spec.mut_args() {
+        out.push_str(&format!(" ({}' : {})", arg.name, arg.lean_type));
+    }
+    out.push_str(" : Prop where\n");
+
+    if spec.return_type.is_some() {
+        out.push_str(&format!(
+            "  h_ret_is_valid : Anneal.IsValid.isValid ret := by verify_is_valid h_ret_is_valid {}\n",
+            spec.fully_qualified_aeneas_name()
+        ));
+    }
+    for arg in spec.mut_args() {
+        let field = format!("h_{}'_is_valid", arg.name);
+        out.push_str(&format!(
+            "  {field} : Anneal.IsValid.isValid {}' := by verify_is_valid {field} {}\n",
+            arg.name,
+            spec.fully_qualified_aeneas_name()
+        ));
+    }
+    for fragment in &spec.annotation.ensures {
+        let field = fragment.name.as_deref().unwrap_or("h_anon");
+        out.push_str(&format!("  {field} : "));
+        push_field_type(out, &fragment.lean);
+        out.push_str(&format!(
+            " := by verify_user_bound {field} {}\n",
+            spec.fully_qualified_aeneas_name()
+        ));
+    }
+    out.push('\n');
+}
+
+fn render_function_spec(spec: &FunctionSpec<'_>, out: &mut String) {
+    match spec.annotation.kind {
+        crate::annotations::FunctionAnnotationKind::Spec => {
+            render_function_theorem("theorem", spec, out);
+            out.push_str(" := by\n");
+            render_function_proof(spec, out);
+        }
+        crate::annotations::FunctionAnnotationKind::UnsafeAxiom => {
+            render_function_theorem("axiom", spec, out);
+            out.push('\n');
+        }
+    }
+}
+
+fn render_function_theorem(kind: &str, spec: &FunctionSpec<'_>, out: &mut String) {
+    out.push_str(&format!("{kind} spec"));
+    push_arg_binders(out, &spec.args);
+    if function_has_pre(spec) {
+        out.push_str(" (h_req : Pre");
+        for arg in &spec.args {
+            out.push_str(&format!(" {}", arg.name));
+        }
+        out.push(')');
+    }
+    out.push_str(" :\n");
+    out.push_str(&format!("  Aeneas.Std.WP.spec ({})", function_call(spec)));
+    out.push_str(" (fun ret_ =>");
+    if let Some(lhs) = ret_destructure_lhs(spec) {
+        out.push_str(&format!("\n    let {lhs} := ret_\n    "));
+    } else {
+        out.push(' ');
+    }
+    out.push_str("Post");
+    for arg in &spec.args {
+        out.push_str(&format!(" {}", arg.name));
+    }
+    if spec.return_type.is_some() {
+        out.push_str(if spec.mut_args().next().is_some() { " ret" } else { " ret_" });
+    }
+    for arg in spec.mut_args() {
+        out.push_str(&format!(" {}'", arg.name));
+    }
+    out.push(')');
+}
+
+fn render_function_proof(spec: &FunctionSpec<'_>, out: &mut String) {
+    let proofs = proof_map(spec);
+    out.push_str("  apply Anneal.wp_prove_orthogonal\n");
+    out.push_str("  · ");
+    if let Some(progress) = proofs.get("h_progress") {
+        push_proof_fragment(out, progress, "    ");
+    } else {
+        out.push_str(&format!(
+            "eval_progress \"Missing orthogonal progress proof. The function progress verification was not automatically solvable.\" {}\n",
+            spec.fully_qualified_aeneas_name()
+        ));
+    }
+    out.push_str(&format!("  · rintro {} h_returns\n", intro_pattern(spec)));
+    if function_has_pre(spec) {
+        let fields = pre_field_names(spec);
+        if !fields.is_empty() {
+            out.push_str(&format!("    rcases h_req with ⟨{}⟩\n", fields.join(", ")));
+        }
+    }
+    out.push_str("    exact\n");
+    for fragment in &spec.annotation.proof_context {
+        render_lean_lines(&fragment.lean, "      ", out);
+    }
+    let fields = post_field_names(spec);
+    if fields.is_empty() {
+        out.push_str("      ⟨⟩\n");
+    } else {
+        out.push_str("      {\n");
+        for field in fields {
+            out.push_str(&format!("        {field} := by\n"));
+            if let Some(proof) = proofs.get(field.as_str()) {
+                render_lean_lines(proof, "          ", out);
+            } else if field.starts_with("h_") && field.ends_with("_is_valid") {
+                out.push_str(&format!(
+                    "          verify_is_valid {field} {}\n",
+                    spec.fully_qualified_aeneas_name()
+                ));
+            } else {
+                out.push_str(&format!(
+                    "          verify_user_bound {field} {}\n",
+                    spec.fully_qualified_aeneas_name()
+                ));
+            }
+        }
+        out.push_str("      }\n");
+    }
+}
+
+fn function_has_pre(spec: &FunctionSpec<'_>) -> bool {
+    !spec.args.is_empty() || !spec.annotation.requires.is_empty()
+}
+
+fn push_arg_binders(out: &mut String, args: &[FunctionArg]) {
+    for arg in args {
+        out.push_str(&format!(" ({} : {})", arg.name, arg.lean_type));
+    }
+}
+
+fn function_call(spec: &FunctionSpec<'_>) -> String {
+    std::iter::once(spec.path.item.as_str())
+        .chain(spec.args.iter().map(|arg| arg.name.as_str()))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn ret_destructure_lhs(spec: &FunctionSpec<'_>) -> Option<String> {
+    let mut_args = spec.mut_args().collect::<Vec<_>>();
+    if mut_args.is_empty() {
+        return None;
+    }
+    let vars = mut_args.iter().map(|arg| format!("{}'", arg.name)).collect::<Vec<_>>();
+    if spec.return_type.is_some() {
+        Some(format!("(ret, {})", vars.join(", ")))
+    } else if vars.len() == 1 {
+        Some(vars[0].clone())
+    } else {
+        Some(format!("({})", vars.join(", ")))
+    }
+}
+
+fn intro_pattern(spec: &FunctionSpec<'_>) -> String {
+    let mut_args = spec.mut_args().collect::<Vec<_>>();
+    if mut_args.is_empty() {
+        return "ret".to_string();
+    }
+    let vars = mut_args.iter().map(|arg| format!("{}'", arg.name)).collect::<Vec<_>>();
+    if spec.return_type.is_some() {
+        format!("⟨ret, {}⟩", vars.join(", "))
+    } else if vars.len() == 1 {
+        vars[0].clone()
+    } else {
+        format!("⟨{}⟩", vars.join(", "))
+    }
+}
+
+fn pre_field_names(spec: &FunctionSpec<'_>) -> Vec<String> {
+    spec.args
+        .iter()
+        .map(|arg| format!("h_{}_is_valid", arg.name))
+        .chain(
+            spec.annotation
+                .requires
+                .iter()
+                .map(|fragment| fragment.name.clone().unwrap_or_else(|| "h_anon".to_string())),
+        )
+        .collect()
+}
+
+fn post_field_names(spec: &FunctionSpec<'_>) -> Vec<String> {
+    let mut fields = Vec::new();
+    if spec.return_type.is_some() {
+        fields.push("h_ret_is_valid".to_string());
+    }
+    fields.extend(spec.mut_args().map(|arg| format!("h_{}'_is_valid", arg.name)));
+    fields.extend(
+        spec.annotation
+            .ensures
+            .iter()
+            .map(|fragment| fragment.name.clone().unwrap_or_else(|| "h_anon".to_string())),
+    );
+    fields
+}
+
+fn proof_map<'a>(spec: &'a FunctionSpec<'_>) -> HashMap<&'a str, &'a str> {
+    spec.annotation
+        .proofs
+        .iter()
+        .filter_map(|fragment| Some((fragment.name.as_deref()?, fragment.lean.as_str())))
+        .collect()
+}
+
+fn push_field_type(out: &mut String, lean: &str) {
+    if lean.contains('\n') {
+        out.push_str("(\n");
+        render_lean_lines(lean, "    ", out);
+        out.push_str("  )");
+    } else {
+        out.push_str(lean);
+    }
+}
+
+fn push_proof_fragment(out: &mut String, proof: &str, continuation_indent: &str) {
+    let mut lines = proof.lines();
+    if let Some(first) = lines.next() {
+        out.push_str(first);
+        out.push('\n');
+        for line in lines {
+            out.push_str(continuation_indent);
+            out.push_str(line);
+            out.push('\n');
+        }
+    } else {
+        out.push_str("sorry\n");
+    }
+}
+
+fn render_lean_lines(lean: &str, indent: &str, out: &mut String) {
+    for line in lean.lines() {
+        out.push_str(indent);
+        out.push_str(line);
+        out.push('\n');
+    }
 }
 
 fn render_type_invariant(
@@ -202,7 +619,10 @@ fn push_with_trailing_newline(out: &mut String, lean: &str) {
 
 #[cfg(test)]
 mod tests {
-    use crate::annotations::{LeanFragment, TraitInvariantAnnotation, TypeInvariantAnnotation};
+    use crate::annotations::{
+        FunctionAnnotation, FunctionAnnotationKind, LeanFragment, TraitInvariantAnnotation,
+        TypeInvariantAnnotation,
+    };
 
     use super::*;
 
@@ -216,6 +636,10 @@ mod tests {
 
     fn fragment(lean: &str) -> LeanFragment {
         LeanFragment { name: None, lean: lean.to_string() }
+    }
+
+    fn named_fragment(name: &str, lean: &str) -> LeanFragment {
+        LeanFragment { name: Some(name.to_string()), lean: lean.to_string() }
     }
 
     #[test]
@@ -245,5 +669,70 @@ mod tests {
 
         assert!(out.contains("class Safe (Self : Type) (inst : MyTrait Self) : Prop where\n"));
         assert!(out.contains("  isSafe :\n    True\n"));
+    }
+
+    #[test]
+    fn renders_function_pre_post_and_wp_theorem() {
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::Spec,
+            context: Vec::new(),
+            requires: vec![named_fragment("h_pre", "x.val > 0")],
+            ensures: vec![named_fragment("result", "ret.val = x.val + 1")],
+            proof_context: vec![fragment("have hx := h_pre")],
+            proofs: vec![named_fragment("result", "simp_all")],
+        };
+        let spec = FunctionSpec {
+            path: path("incr"),
+            args: vec![FunctionArg {
+                name: "x".to_string(),
+                lean_type: "Std.U32".to_string(),
+                is_mut_ref: false,
+            }],
+            return_type: Some("Std.U32".to_string()),
+            annotation: &annotation,
+        };
+        let mut out = String::new();
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains("structure Pre (x : Std.U32) : Prop where\n"));
+        assert!(
+            out.contains(
+                "  h_pre : x.val > 0 := by verify_user_bound h_pre _root_.test_impl.incr\n"
+            )
+        );
+        assert!(out.contains("structure Post (x : Std.U32) (ret : Std.U32) : Prop where\n"));
+        assert!(out.contains(
+            "  result : ret.val = x.val + 1 := by verify_user_bound result _root_.test_impl.incr\n"
+        ));
+        assert!(out.contains("theorem spec (x : Std.U32) (h_req : Pre x) :\n"));
+        assert!(out.contains("Aeneas.Std.WP.spec (incr x) (fun ret_ => Post x ret_)"));
+        assert!(out.contains("have hx := h_pre\n"));
+        assert!(out.contains("        result := by\n          simp_all\n"));
+    }
+
+    #[test]
+    fn renders_unsafe_axiom_without_proof_body() {
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::UnsafeAxiom,
+            context: Vec::new(),
+            requires: Vec::new(),
+            ensures: vec![named_fragment("result", "ret.val = 0")],
+            proof_context: Vec::new(),
+            proofs: Vec::new(),
+        };
+        let spec = FunctionSpec {
+            path: path("read"),
+            args: Vec::new(),
+            return_type: Some("Std.U32".to_string()),
+            annotation: &annotation,
+        };
+        let mut out = String::new();
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains("axiom spec :\n"));
+        assert!(out.contains("Aeneas.Std.WP.spec (read) (fun ret_ => Post ret_)"));
+        assert!(!out.contains("apply Anneal.wp_prove_orthogonal"));
     }
 }
