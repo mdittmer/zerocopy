@@ -55,6 +55,45 @@ fn ensure_test_toolchain(bin_path: &std::path::Path) {
 }
 
 #[cfg(feature = "exocrate_tests")]
+fn only_llbc_file(output_dir: &std::path::Path) -> std::path::PathBuf {
+    let llbc_files = std::fs::read_dir(output_dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|ext| ext == "llbc"))
+        .collect::<Vec<_>>();
+
+    assert_eq!(llbc_files.len(), 1, "expected one LLBC file in {output_dir:?}");
+    llbc_files.into_iter().next().unwrap()
+}
+
+#[cfg(feature = "exocrate_tests")]
+fn find_fun<'a>(
+    crate_data: &'a charon_lib::export::CrateData,
+    name: &str,
+) -> &'a charon_lib::ast::FunDecl {
+    crate_data
+        .translated
+        .fun_decls
+        .iter()
+        .find(|fun| {
+            fun.item_meta.name.name.iter().any(
+                |elem| matches!(elem, charon_lib::ast::PathElem::Ident(ident, _) if ident == name),
+            )
+        })
+        .unwrap_or_else(|| panic!("could not find function {name:?} in LLBC"))
+}
+
+#[cfg(feature = "exocrate_tests")]
+fn anneal_metadata_doc(fun: &charon_lib::ast::FunDecl) -> Option<&str> {
+    fun.item_meta.attr_info.attributes.iter().find_map(|attr| match attr {
+        charon_lib::ast::Attribute::DocComment(comment) => {
+            comment.trim_start().strip_prefix("anneal:v2:")
+        }
+        _ => None,
+    })
+}
+
+#[cfg(feature = "exocrate_tests")]
 #[test]
 fn test_expand_subcommand_simple() {
     let temp_dir = tempfile::tempdir().unwrap();
@@ -125,4 +164,105 @@ fn test_expand_subcommand_simple() {
     }
 
     assert!(found_llbc, "No .llbc file found in output directory {:?}", output_dir);
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_expand_preserves_attribute_metadata_and_opacity() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project_dir = temp_dir.path().join("project");
+    let output_dir = temp_dir.path().join("llbc_out");
+    let annotations_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("anneal-annotations");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("Cargo.toml"),
+        format!(
+            r#"
+            [package]
+            name = "test_proj"
+            version = "0.1.0"
+            edition = "2024"
+
+            [dependencies]
+            anneal = {{ package = "anneal-annotations", path = "{}" }}
+        "#,
+            annotations_dir.display()
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        project_dir.join("src").join("lib.rs"),
+        r#"
+            #![register_tool(aeneas)]
+
+            #[anneal::unsafe_axiom(
+                requires(non_null = "ptr != 0"),
+                ensures(value = "ret = 7")
+            )]
+            pub unsafe fn read(ptr: *const u32) -> u32 {
+                unsafe { *ptr }
+            }
+
+            #[anneal::spec(
+                ensures(value = "ret = 7"),
+                proof(value = "simp [seven]")
+            )]
+            pub fn seven() -> u32 {
+                7
+            }
+        "#,
+    )
+    .unwrap();
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    let mut cmd = cargo_anneal_command(&bin_path);
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.arg("expand")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .arg("--lib")
+        .arg("--output-dir")
+        .arg(&output_dir)
+        .arg("--no-progress");
+
+    let output = cmd.output().expect("failed to execute cargo-anneal");
+
+    println!("stdout: {}", String::from_utf8_lossy(&output.stdout));
+    println!("stderr: {}", String::from_utf8_lossy(&output.stderr));
+
+    assert!(output.status.success(), "cargo-anneal failed");
+
+    let llbc_path = only_llbc_file(&output_dir);
+    let file = std::fs::File::open(llbc_path).unwrap();
+    let crate_data: charon_lib::export::CrateData = serde_json::from_reader(file).unwrap();
+    let read = find_fun(&crate_data, "read");
+    let seven = find_fun(&crate_data, "seven");
+
+    assert!(matches!(read.body, charon_lib::ast::Body::Opaque));
+    assert!(matches!(read.item_meta.opacity, charon_lib::ast::ItemOpacity::Opaque));
+    assert!(matches!(seven.body, charon_lib::ast::Body::Structured(_)));
+
+    let read_metadata =
+        anneal_metadata_doc(read).expect("read should have Anneal metadata doc comment");
+    let read_metadata: serde_json::Value = serde_json::from_str(read_metadata).unwrap();
+    assert_eq!(read_metadata["kind"], "unsafe_axiom");
+    assert_eq!(read_metadata["sections"][0]["kind"], "requires");
+    assert_eq!(read_metadata["sections"][0]["name"], "non_null");
+    assert_eq!(read_metadata["sections"][0]["lean"], "ptr != 0");
+    assert_eq!(read_metadata["sections"][1]["kind"], "ensures");
+    assert_eq!(read_metadata["sections"][1]["lean"], "ret = 7");
+
+    let seven_metadata =
+        anneal_metadata_doc(seven).expect("seven should have Anneal metadata doc comment");
+    let seven_metadata: serde_json::Value = serde_json::from_str(seven_metadata).unwrap();
+    assert_eq!(seven_metadata["kind"], "spec");
+    assert_eq!(seven_metadata["sections"][0]["kind"], "ensures");
+    assert_eq!(seven_metadata["sections"][0]["lean"], "ret = 7");
+    assert_eq!(seven_metadata["sections"][1]["kind"], "proof");
+    assert_eq!(seven_metadata["sections"][1]["lean"], "simp [seven]");
 }
