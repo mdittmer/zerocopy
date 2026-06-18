@@ -116,10 +116,17 @@ pub struct AnnotatedArtifact {
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct AnnotatedItem {
+    pub item_id: AnnotatedItemId,
     pub item_kind: AnnotatedItemKind,
     pub path: Vec<String>,
     pub annotation: Annotation,
     pub body: AnnotationBody,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct AnnotatedItemId {
+    pub kind: AnnotatedItemKind,
+    pub index: usize,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -169,11 +176,17 @@ pub fn extract_crate_annotations(
             is_unsafe_function: Some(fun.signature.is_unsafe),
             is_opaque_function: Some(matches!(fun.body, Body::Opaque)),
         };
-        maybe_push_annotation(&mut items, &fun.item_meta, facts)?;
+        maybe_push_annotation(
+            &mut items,
+            AnnotatedItemId::new(AnnotatedItemKind::Function, fun.def_id.index()),
+            &fun.item_meta,
+            facts,
+        )?;
     }
     for ty in &krate.type_decls {
         maybe_push_annotation(
             &mut items,
+            AnnotatedItemId::new(AnnotatedItemKind::Type, ty.def_id.index()),
             &ty.item_meta,
             ItemFacts::plain(AnnotatedItemKind::Type),
         )?;
@@ -181,6 +194,7 @@ pub fn extract_crate_annotations(
     for tr in &krate.trait_decls {
         maybe_push_annotation(
             &mut items,
+            AnnotatedItemId::new(AnnotatedItemKind::Trait, tr.def_id.index()),
             &tr.item_meta,
             ItemFacts::plain(AnnotatedItemKind::Trait),
         )?;
@@ -188,6 +202,7 @@ pub fn extract_crate_annotations(
     for imp in &krate.trait_impls {
         maybe_push_annotation(
             &mut items,
+            AnnotatedItemId::new(AnnotatedItemKind::Impl, imp.def_id.index()),
             &imp.item_meta,
             ItemFacts::plain(AnnotatedItemKind::Impl),
         )?;
@@ -195,6 +210,7 @@ pub fn extract_crate_annotations(
     for global in &krate.global_decls {
         maybe_push_annotation(
             &mut items,
+            AnnotatedItemId::new(AnnotatedItemKind::Global, global.def_id.index()),
             &global.item_meta,
             ItemFacts::plain(AnnotatedItemKind::Global),
         )?;
@@ -282,6 +298,7 @@ impl AnnotatedArtifact {
 
 fn maybe_push_annotation(
     items: &mut Vec<AnnotatedItem>,
+    item_id: AnnotatedItemId,
     meta: &ItemMeta,
     facts: ItemFacts,
 ) -> Result<(), Error> {
@@ -290,7 +307,7 @@ fn maybe_push_annotation(
         return Ok(());
     };
     let body = validate_annotation(&annotation, facts.with_opacity(meta.opacity), &path)?;
-    items.push(AnnotatedItem { item_kind: facts.kind, path, annotation, body });
+    items.push(AnnotatedItem { item_id, item_kind: facts.kind, path, annotation, body });
     Ok(())
 }
 
@@ -568,6 +585,12 @@ impl AnnotatedItemKind {
             Self::Impl => "impl",
             Self::Global => "global",
         }
+    }
+}
+
+impl AnnotatedItemId {
+    fn new(kind: AnnotatedItemKind, index: usize) -> Self {
+        Self { kind, index }
     }
 }
 
@@ -851,6 +874,7 @@ mod tests {
         let annotated = AnnotatedArtifact {
             artifact,
             items: vec![AnnotatedItem {
+                item_id: AnnotatedItemId::new(AnnotatedItemKind::Function, 7),
                 item_kind: AnnotatedItemKind::Function,
                 path: vec!["test_proj".into(), "f".into()],
                 annotation,
@@ -863,6 +887,8 @@ mod tests {
         assert_eq!(value["artifact"]["package_name"], "test_proj");
         assert_eq!(value["artifact"]["target_kind"], "Lib");
         assert!(value["artifact"]["llbc_file"].as_str().unwrap().ends_with(".llbc"));
+        assert_eq!(value["items"][0]["item_id"]["kind"], "function");
+        assert_eq!(value["items"][0]["item_id"]["index"], 7);
         assert_eq!(value["items"][0]["item_kind"], "function");
         assert_eq!(value["items"][0]["annotation"]["argument_names"], serde_json::json!(["x"]));
         assert_eq!(value["items"][0]["body"]["function"]["requires"][0]["name"], "h_pre");
