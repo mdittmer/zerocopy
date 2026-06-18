@@ -111,11 +111,9 @@ fn render_item(
                 .trait_decls
                 .get(trait_id)
                 .ok_or(Error::MissingDecl { kind: "trait", index: item.item_id.index })?;
-            if !tr.generics.types.is_empty() || !tr.generics.const_generics.is_empty() {
-                return Err(Error::UnsupportedGenerics { path: item.path.join("::") });
-            }
+            let generics = lean_trait_generics(&tr.generics, &item.path.join("::"))?;
             let path = crate::names::item_path(krate, &tr.item_meta.name)?;
-            render_trait_invariant(&path, body, out);
+            render_trait_invariant(&path, &generics, body, out);
         }
         crate::annotations::AnnotationBody::Function(function) => {
             let fun_id = FunDeclId::from_usize(item.item_id.index);
@@ -255,6 +253,14 @@ fn lean_generics(params: &GenericParams, path: &str) -> Result<LeanGenerics, Err
             .map(|param| crate::names::lean_identifier(&param.name))
             .collect(),
     })
+}
+
+fn lean_trait_generics(params: &GenericParams, path: &str) -> Result<LeanGenerics, Error> {
+    let mut generics = lean_generics(params, path)?;
+    if generics.type_params.first().map(String::as_str) == Some("Self") {
+        generics.type_params.remove(0);
+    }
+    Ok(generics)
 }
 
 fn body_input_locals(body: &Body) -> Option<Vec<&Local>> {
@@ -599,15 +605,24 @@ fn type_application(name: &str, generics: &LeanGenerics) -> String {
 
 fn render_trait_invariant(
     path: &crate::names::LeanItemPath,
+    generics: &LeanGenerics,
     body: &crate::annotations::TraitInvariantAnnotation,
     out: &mut String,
 ) {
     render_namespace_open(path, out);
     render_context(&body.context, out);
-    out.push_str(&format!("class Safe (Self : Type) (inst : {} Self) : Prop where\n", path.item));
+    out.push_str("class Safe (Self : Type)");
+    push_generic_binders(out, generics);
+    out.push_str(&format!(" (inst : {}) : Prop where\n", trait_application(&path.item, generics)));
     out.push_str("  isSafe :\n");
     render_fragments(&body.is_safe, "    ", out);
     render_namespace_close(path, out);
+}
+
+fn trait_application(name: &str, generics: &LeanGenerics) -> String {
+    let mut args = vec!["Self".to_string()];
+    args.extend(generics.type_params.iter().cloned());
+    format!("{name} {}", args.join(" "))
 }
 
 fn render_namespace_open(path: &crate::names::LeanItemPath, out: &mut String) {
@@ -659,6 +674,8 @@ fn push_with_trailing_newline(out: &mut String, lean: &str) {
 
 #[cfg(test)]
 mod tests {
+    use charon_lib::ast::{GenericParams, TypeParam, TypeVarId};
+
     use crate::annotations::{
         FunctionAnnotation, FunctionAnnotationKind, LeanFragment, TraitInvariantAnnotation,
         TypeInvariantAnnotation,
@@ -680,6 +697,18 @@ mod tests {
 
     fn named_fragment(name: &str, lean: &str) -> LeanFragment {
         LeanFragment { name: Some(name.to_string()), lean: lean.to_string() }
+    }
+
+    fn generic_params(names: &[&str]) -> GenericParams {
+        GenericParams {
+            types: names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| TypeParam::new(TypeVarId::from_usize(index), name.to_string()))
+                .collect::<Vec<_>>()
+                .into(),
+            ..Default::default()
+        }
     }
 
     #[test]
@@ -705,10 +734,17 @@ mod tests {
             TraitInvariantAnnotation { context: Vec::new(), is_safe: vec![fragment("True")] };
         let mut out = String::new();
 
-        render_trait_invariant(&path("MyTrait"), &body, &mut out);
+        render_trait_invariant(&path("MyTrait"), &LeanGenerics::default(), &body, &mut out);
 
         assert!(out.contains("class Safe (Self : Type) (inst : MyTrait Self) : Prop where\n"));
         assert!(out.contains("  isSafe :\n    True\n"));
+    }
+
+    #[test]
+    fn drops_charon_synthetic_self_from_trait_generics() {
+        let generics = lean_trait_generics(&generic_params(&["Self", "T"]), "SafeTrait").unwrap();
+
+        assert_eq!(generics.type_params, ["T"]);
     }
 
     #[test]
@@ -788,6 +824,14 @@ mod tests {
         render_type_invariant(&path("Wrapper"), &generics, &type_body, &mut out);
 
         assert!(out.contains("instance {T : Type} : Anneal.IsValid (Wrapper T) where\n"));
+
+        let trait_body =
+            TraitInvariantAnnotation { context: Vec::new(), is_safe: vec![fragment("True")] };
+        render_trait_invariant(&path("SafeTrait"), &generics, &trait_body, &mut out);
+
+        assert!(out.contains(
+            "class Safe (Self : Type) {T : Type} (inst : SafeTrait Self T) : Prop where\n"
+        ));
 
         let annotation = FunctionAnnotation {
             kind: FunctionAnnotationKind::Spec,
