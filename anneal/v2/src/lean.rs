@@ -11,6 +11,8 @@
 
 use anyhow::Context as _;
 
+const ANNEAL_LEAN: &str = include_str!("../../src/Anneal.lean");
+
 pub fn write_workspace(
     toolchain: &crate::setup::Toolchain,
     roots: &crate::resolve::LockedRoots<'_>,
@@ -26,6 +28,9 @@ pub fn write_workspace(
             .context("failed to read Aeneas lean-toolchain")?;
     std::fs::write(lean_root.join("lean-toolchain"), lean_toolchain).with_context(|| {
         format!("failed to write `{}`", lean_root.join("lean-toolchain").display())
+    })?;
+    std::fs::write(generated_root.join("Anneal.lean"), ANNEAL_LEAN).with_context(|| {
+        format!("failed to write `{}`", generated_root.join("Anneal.lean").display())
     })?;
 
     let modules = generated_modules(artifacts);
@@ -45,7 +50,7 @@ fn generated_modules(artifacts: &[crate::aeneas::LeanArtifact]) -> Vec<String> {
     let mut modules = vec!["Generated".to_string()];
     for artifact in artifacts {
         let slug = artifact.artifact.artifact_slug();
-        for stem in ["Funs", "Types", "FunsExternal", "TypesExternal"] {
+        for stem in ["Funs", "Types", "FunsExternal", "TypesExternal", "Specs"] {
             if artifact.output_dir.join(format!("{stem}.lean")).exists() {
                 modules.push(format!("{slug}.{stem}"));
             }

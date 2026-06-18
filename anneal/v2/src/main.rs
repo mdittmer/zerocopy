@@ -20,6 +20,7 @@ mod names;
 mod resolve;
 mod scanner;
 mod setup;
+mod specs;
 mod util;
 
 /// Anneal
@@ -92,8 +93,9 @@ fn expand(args: ExpandArgs) -> anyhow::Result<()> {
 }
 
 fn generate(args: ExpandArgs) -> anyhow::Result<()> {
-    compile_and_extract(args, |toolchain, locked_roots, packages, _| {
+    compile_and_extract(args, |toolchain, locked_roots, packages, annotated_artifacts| {
         let lean_artifacts = crate::aeneas::run_aeneas(toolchain, locked_roots, packages)?;
+        let spec_paths = crate::specs::write_specs(locked_roots, annotated_artifacts)?;
         let lean_root = crate::lean::write_workspace(toolchain, locked_roots, &lean_artifacts)?;
         for artifact in &lean_artifacts {
             log::debug!(
@@ -102,9 +104,13 @@ fn generate(args: ExpandArgs) -> anyhow::Result<()> {
                 artifact.output_dir.display()
             );
         }
+        for path in &spec_paths {
+            log::debug!("Generated Anneal specs at {}", path.display());
+        }
         log::info!(
-            "Generated Aeneas Lean for {} artifact(s) under {}",
+            "Generated Aeneas Lean for {} artifact(s) and {} Anneal spec file(s) under {}",
             lean_artifacts.len(),
+            spec_paths.len(),
             locked_roots.lean_generated_root().display()
         );
         println!("Lean workspace generated at: {}", lean_root.display());
