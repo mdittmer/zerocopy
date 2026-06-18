@@ -30,6 +30,7 @@ exocrate::parse_remote_archive! {
 }
 
 pub enum Tool {
+    Aeneas,
     Cargo,
     Charon,
     Rustc,
@@ -38,6 +39,7 @@ pub enum Tool {
 impl Tool {
     pub fn name(&self) -> &'static str {
         match self {
+            Self::Aeneas => "aeneas",
             Self::Cargo => "cargo",
             Self::Charon => "charon",
             Self::Rustc => "rustc",
@@ -47,7 +49,7 @@ impl Tool {
     pub fn path(&self, toolchain: &Toolchain) -> std::path::PathBuf {
         match self {
             Self::Cargo | Self::Rustc => toolchain.rust_bin().join(self.name()),
-            Self::Charon => toolchain.aeneas_bin_dir().join(self.name()),
+            Self::Aeneas | Self::Charon => toolchain.aeneas_bin_dir().join(self.name()),
         }
     }
 }
@@ -97,7 +99,7 @@ impl Toolchain {
         cmd.env_clear();
         match tool {
             Tool::Cargo | Tool::Rustc => {}
-            Tool::Charon => {
+            Tool::Aeneas | Tool::Charon => {
                 // The archive supplies Rust tools, but not host build tools
                 // such as the linker. Keep the caller's `PATH` after our Rust
                 // bin directory so Cargo builds use the managed Rust toolchain

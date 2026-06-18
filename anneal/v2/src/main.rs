@@ -10,6 +10,7 @@
 use anyhow::Context as _;
 use clap::Parser as _;
 
+mod aeneas;
 mod annotations;
 mod charon;
 mod diagnostics;
@@ -32,6 +33,8 @@ enum Commands {
     Setup(SetupArgs),
     /// Expand a crate (runs Charon)
     Expand(ExpandArgs),
+    /// Generate Lean output with Aeneas after running Charon
+    Generate(ExpandArgs),
 
     /// Helper to acquire shared or exclusive locks for multi-process integration testing (dev only)
     #[cfg(feature = "exocrate_tests")]
@@ -82,6 +85,41 @@ fn setup(args: SetupArgs) -> anyhow::Result<()> {
 }
 
 fn expand(args: ExpandArgs) -> anyhow::Result<()> {
+    compile_and_extract(args, |_, _, _, _| Ok(()))
+}
+
+fn generate(args: ExpandArgs) -> anyhow::Result<()> {
+    compile_and_extract(args, |toolchain, locked_roots, packages, _| {
+        let lean_artifacts = crate::aeneas::run_aeneas(toolchain, locked_roots, packages)?;
+        for artifact in &lean_artifacts {
+            log::debug!(
+                "Generated Aeneas Lean for {} at {}",
+                artifact.artifact.llbc_file_name(),
+                artifact.output_dir.display()
+            );
+        }
+        log::info!(
+            "Generated Aeneas Lean for {} artifact(s) under {}",
+            lean_artifacts.len(),
+            locked_roots.lean_generated_root().display()
+        );
+        println!(
+            "Aeneas Lean output generated at: {}",
+            locked_roots.lean_generated_root().display()
+        );
+        Ok(())
+    })
+}
+
+fn compile_and_extract(
+    args: ExpandArgs,
+    after_extract: impl FnOnce(
+        &crate::setup::Toolchain,
+        &crate::resolve::LockedRoots<'_>,
+        &[crate::scanner::AnnealArtifact],
+        &[crate::annotations::AnnotatedArtifact],
+    ) -> anyhow::Result<()>,
+) -> anyhow::Result<()> {
     let toolchain = crate::setup::Toolchain::resolve()?;
     let roots = crate::resolve::resolve_roots(&args.resolve_args, &toolchain)?;
     let mode = if args.include_dependencies {
@@ -126,6 +164,7 @@ fn expand(args: ExpandArgs) -> anyhow::Result<()> {
         "Extracted {annotated_items} Anneal annotation(s) from {} artifact(s)",
         annotated_artifacts.len()
     );
+    after_extract(&toolchain, &locked_roots, &packages, &annotated_artifacts)?;
     Ok(())
 }
 
@@ -145,6 +184,7 @@ fn main() -> anyhow::Result<()> {
     match args.command {
         Commands::Setup(args) => setup(args),
         Commands::Expand(args) => expand(args),
+        Commands::Generate(args) => generate(args),
 
         #[cfg(feature = "exocrate_tests")]
         Commands::TestLockHelper { role, lock_dir, log_file, sig_file } => {
@@ -198,6 +238,11 @@ mod tests {
                 crate::setup::Tool::Cargo.path(&toolchain).is_file(),
                 "cargo is not a file: {:?}",
                 crate::setup::Tool::Cargo.path(&toolchain)
+            );
+            assert!(
+                crate::setup::Tool::Aeneas.path(&toolchain).is_file(),
+                "aeneas is not a file: {:?}",
+                crate::setup::Tool::Aeneas.path(&toolchain)
             );
             assert!(
                 crate::setup::Tool::Rustc.path(&toolchain).is_file(),
