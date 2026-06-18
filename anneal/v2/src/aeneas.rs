@@ -62,5 +62,59 @@ fn run_artifact(
         );
     }
 
+    materialize_external_templates(&output_dir)?;
+
     Ok(LeanArtifact { artifact: artifact.clone(), output_dir })
+}
+
+fn materialize_external_templates(output_dir: &std::path::Path) -> anyhow::Result<()> {
+    for stem in ["FunsExternal", "TypesExternal"] {
+        let template = output_dir.join(format!("{stem}_Template.lean"));
+        let concrete = output_dir.join(format!("{stem}.lean"));
+        if template.exists() && !concrete.exists() {
+            std::fs::copy(&template, &concrete).with_context(|| {
+                format!("failed to copy `{}` to `{}`", template.display(), concrete.display())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn materializes_missing_external_template_modules() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path();
+        std::fs::write(output_dir.join("FunsExternal_Template.lean"), "-- funs\n").unwrap();
+        std::fs::write(output_dir.join("TypesExternal_Template.lean"), "-- types\n").unwrap();
+
+        materialize_external_templates(output_dir).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("FunsExternal.lean")).unwrap(),
+            "-- funs\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("TypesExternal.lean")).unwrap(),
+            "-- types\n"
+        );
+    }
+
+    #[test]
+    fn preserves_existing_external_modules() {
+        let temp = tempfile::tempdir().unwrap();
+        let output_dir = temp.path();
+        std::fs::write(output_dir.join("FunsExternal_Template.lean"), "-- template\n").unwrap();
+        std::fs::write(output_dir.join("FunsExternal.lean"), "-- user model\n").unwrap();
+
+        materialize_external_templates(output_dir).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(output_dir.join("FunsExternal.lean")).unwrap(),
+            "-- user model\n"
+        );
+    }
 }
