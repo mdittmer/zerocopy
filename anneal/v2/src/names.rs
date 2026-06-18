@@ -28,6 +28,10 @@ pub enum Error {
     UnsupportedImplSelfType,
     #[error("missing Charon name for type declaration {index}")]
     MissingTypeName { index: usize },
+    #[error("missing Charon trait declaration {index}")]
+    MissingTraitName { index: usize },
+    #[error("missing Charon trait implementation {index}")]
+    MissingTraitImpl { index: usize },
 }
 
 pub fn crate_namespace(krate: &TranslatedCrate) -> String {
@@ -46,7 +50,9 @@ pub fn item_path(krate: &TranslatedCrate, name: &Name) -> Result<LeanItemPath, E
             PathElem::Impl(ImplElem::Ty(ty)) => {
                 parts.push(inherent_impl_owner(krate, &ty.skip_binder)?);
             }
-            PathElem::Impl(ImplElem::Trait(_)) => return Err(Error::UnsupportedTraitImplPath),
+            PathElem::Impl(ImplElem::Trait(impl_id)) => {
+                parts.extend(trait_impl_namespace(krate, *impl_id)?);
+            }
             PathElem::Instantiated(_) => {}
             PathElem::Target(_) => return Err(Error::UnsupportedTargetPath),
         }
@@ -117,6 +123,73 @@ fn inherent_impl_owner(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error
         .or_else(|| krate.item_names.get(&item_id))
         .ok_or_else(|| Error::MissingTypeName { index: type_id.index() })?;
     last_ident_segment(name).ok_or(Error::UnsupportedImplSelfType)
+}
+
+fn trait_impl_namespace(
+    krate: &TranslatedCrate,
+    impl_id: charon_lib::ast::TraitImplId,
+) -> Result<Vec<String>, Error> {
+    let trait_impl =
+        krate.trait_impls.get(impl_id).ok_or(Error::MissingTraitImpl { index: impl_id.index() })?;
+    let self_ty = trait_impl
+        .impl_trait
+        .generics
+        .types
+        .iter()
+        .next()
+        .ok_or(Error::UnsupportedTraitImplPath)?;
+    let self_name = plain_adt_self_type(krate, self_ty)?;
+
+    let trait_decl = krate
+        .trait_decls
+        .get(trait_impl.impl_trait.id)
+        .ok_or(Error::MissingTraitName { index: trait_impl.impl_trait.id.index() })?;
+    let trait_path = item_path(krate, &trait_decl.item_meta.name)?;
+    if trait_path.crate_namespace != crate_namespace(krate)
+        || !trait_path.relative_namespace.is_empty()
+    {
+        return Err(Error::UnsupportedTraitImplPath);
+    }
+
+    Ok(vec![
+        self_name,
+        "Insts".to_string(),
+        trait_impl_segment(&trait_path.crate_namespace, &trait_path.item),
+    ])
+}
+
+fn plain_adt_self_type(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error> {
+    let TyKind::Adt(type_ref) = ty.0.inner() else {
+        return Err(Error::UnsupportedTraitImplPath);
+    };
+    if !type_ref.generics.types.is_empty()
+        || !type_ref.generics.const_generics.is_empty()
+        || !type_ref.generics.trait_refs.is_empty()
+    {
+        return Err(Error::UnsupportedTraitImplPath);
+    }
+    let TypeId::Adt(type_id) = &type_ref.id else {
+        return Err(Error::UnsupportedTraitImplPath);
+    };
+    let item_id = ItemId::Type(*type_id);
+    let name = krate
+        .short_names
+        .get(&item_id)
+        .or_else(|| krate.item_names.get(&item_id))
+        .ok_or_else(|| Error::MissingTypeName { index: type_id.index() })?;
+    last_ident_segment(name).ok_or(Error::UnsupportedTraitImplPath)
+}
+
+fn trait_impl_segment(crate_namespace: &str, trait_name: &str) -> String {
+    format!("{}{}", uppercase_first(crate_namespace), trait_name)
+}
+
+fn uppercase_first(value: &str) -> String {
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
 }
 
 fn last_ident_segment(name: &Name) -> Option<String> {
@@ -215,5 +288,13 @@ mod tests {
 
         assert_eq!(path.relative_namespace, ["helper_2"]);
         assert_eq!(path.aeneas_name(), "crate.helper_2.f");
+    }
+
+    #[test]
+    fn trait_impl_segment_matches_observed_aeneas_shape() {
+        assert_eq!(
+            trait_impl_segment("anneal_v2_generate_smoke", "ReadVal"),
+            "Anneal_v2_generate_smokeReadVal"
+        );
     }
 }
