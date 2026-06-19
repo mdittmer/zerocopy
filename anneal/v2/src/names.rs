@@ -138,7 +138,7 @@ fn trait_impl_namespace(
         .iter()
         .next()
         .ok_or(Error::UnsupportedTraitImplPath)?;
-    let self_name = plain_adt_self_type(krate, self_ty)?;
+    let self_name = adt_self_type_owner(krate, self_ty)?;
 
     let trait_decl = krate
         .trait_decls
@@ -158,14 +158,11 @@ fn trait_impl_namespace(
     ])
 }
 
-fn plain_adt_self_type(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error> {
+fn adt_self_type_owner(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error> {
     let TyKind::Adt(type_ref) = ty.0.inner() else {
         return Err(Error::UnsupportedTraitImplPath);
     };
-    if !type_ref.generics.types.is_empty()
-        || !type_ref.generics.const_generics.is_empty()
-        || !type_ref.generics.trait_refs.is_empty()
-    {
+    if !type_ref.generics.trait_refs.is_empty() {
         return Err(Error::UnsupportedTraitImplPath);
     }
     let TypeId::Adt(type_id) = &type_ref.id else {
@@ -243,12 +240,32 @@ fn is_lean_keyword(ident: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use charon_lib::ast::{Disambiguator, Name, PathElem, TranslatedCrate};
+    use charon_lib::ast::{
+        DeBruijnVar, Disambiguator, GenericArgs, HashConsed, ItemId, Name, PathElem,
+        TranslatedCrate, Ty, TyKind, TypeDeclId, TypeDeclRef, TypeId, TypeVarId,
+    };
 
     use super::*;
 
     fn ident(raw: &str) -> PathElem {
         PathElem::Ident(raw.to_string(), Disambiguator::ZERO)
+    }
+
+    fn ty(kind: TyKind) -> Ty {
+        Ty(HashConsed::new(kind))
+    }
+
+    fn args(types: Vec<Ty>) -> Box<GenericArgs> {
+        Box::new(GenericArgs {
+            regions: Default::default(),
+            types: types.into(),
+            const_generics: Default::default(),
+            trait_refs: Default::default(),
+        })
+    }
+
+    fn type_var() -> Ty {
+        ty(TyKind::TypeVar(DeBruijnVar::Free(TypeVarId::ZERO)))
     }
 
     #[test]
@@ -296,5 +313,20 @@ mod tests {
             trait_impl_segment("anneal_v2_generate_smoke", "ReadVal"),
             "Anneal_v2_generate_smokeReadVal"
         );
+    }
+
+    #[test]
+    fn trait_impl_owner_uses_base_adt_for_generic_self_type() {
+        let type_id = TypeDeclId::ZERO;
+        let mut krate = TranslatedCrate::default();
+        krate
+            .item_names
+            .insert(ItemId::Type(type_id), Name { name: vec![ident("crate"), ident("Wrapper")] });
+        let wrapper_of_t = ty(TyKind::Adt(TypeDeclRef {
+            id: TypeId::Adt(type_id),
+            generics: args(vec![type_var()]),
+        }));
+
+        assert_eq!(adt_self_type_owner(&krate, &wrapper_of_t).unwrap(), "Wrapper");
     }
 }
