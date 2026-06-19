@@ -7,7 +7,10 @@
 
 #![allow(dead_code)]
 
-use charon_lib::ast::{ImplElem, ItemId, Name, PathElem, TranslatedCrate, Ty, TyKind, TypeId};
+use charon_lib::ast::{
+    GenericArgs, GenericParams, ImplElem, ItemId, Name, PathElem, TranslatedCrate, Ty, TyKind,
+    TypeId,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LeanItemPath {
@@ -32,6 +35,8 @@ pub enum Error {
     MissingTraitName { index: usize },
     #[error("missing Charon trait implementation {index}")]
     MissingTraitImpl { index: usize },
+    #[error(transparent)]
+    Type(#[from] crate::lean_types::Error),
 }
 
 pub fn crate_namespace(krate: &TranslatedCrate) -> String {
@@ -154,7 +159,13 @@ fn trait_impl_namespace(
     Ok(vec![
         self_name,
         "Insts".to_string(),
-        trait_impl_segment(&trait_path.crate_namespace, &trait_path.item),
+        trait_impl_segment_for_ref(
+            krate,
+            &trait_impl.generics,
+            &trait_path.crate_namespace,
+            &trait_path.item,
+            &trait_impl.impl_trait.generics,
+        )?,
     ])
 }
 
@@ -179,6 +190,31 @@ fn adt_self_type_owner(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error
 
 fn trait_impl_segment(crate_namespace: &str, trait_name: &str) -> String {
     format!("{}{}", uppercase_first(crate_namespace), trait_name)
+}
+
+fn trait_impl_segment_for_ref(
+    krate: &TranslatedCrate,
+    impl_generics: &GenericParams,
+    crate_namespace: &str,
+    trait_name: &str,
+    trait_args: &GenericArgs,
+) -> Result<String, Error> {
+    let mut segment = trait_impl_segment(crate_namespace, trait_name);
+    let rendered_args =
+        crate::lean_types::render_generic_args_with_generics(krate, impl_generics, trait_args)?;
+    for arg in rendered_args.into_iter().skip(1) {
+        segment.push_str(&trait_impl_arg_segment(&arg));
+    }
+    Ok(segment)
+}
+
+fn trait_impl_arg_segment(arg: &str) -> String {
+    arg.split(|ch: char| !(ch == '_' || ch == '\'' || ch == '.' || ch.is_ascii_alphanumeric()))
+        .filter(|part| !part.is_empty())
+        .filter_map(|part| part.rsplit('.').next())
+        .map(lean_identifier)
+        .collect::<Vec<_>>()
+        .join("")
 }
 
 fn uppercase_first(value: &str) -> String {
@@ -313,6 +349,13 @@ mod tests {
             trait_impl_segment("anneal_v2_generate_smoke", "ReadVal"),
             "Anneal_v2_generate_smokeReadVal"
         );
+    }
+
+    #[test]
+    fn trait_impl_arg_segment_compacts_rendered_lean_types() {
+        assert_eq!(trait_impl_arg_segment("Std.U32"), "U32");
+        assert_eq!(trait_impl_arg_segment("(Wrapper T)"), "WrapperT");
+        assert_eq!(trait_impl_arg_segment("(ConstWrapper T N)"), "ConstWrapperTN");
     }
 
     #[test]
