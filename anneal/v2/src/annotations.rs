@@ -155,6 +155,10 @@ pub enum Error {
     UnsafeAxiomNotOpaque { path: String },
     #[error("`#[anneal::spec]` cannot verify opaque function `{path}`")]
     SpecIsOpaque { path: String },
+    #[error(
+        "`#[anneal::spec]` cannot verify `{path}` because Charon did not emit a function body; use `#[anneal::unsafe_axiom]` for bodyless declarations"
+    )]
+    SpecHasNoBody { path: String },
     #[error("`requires` sections are only permitted on unsafe functions; `{path}` is safe")]
     RequiresSafeFunction { path: String },
     #[error("`#[anneal::{annotation}]` on `{path}` is missing a `{section}` section")]
@@ -173,6 +177,10 @@ pub fn extract_crate_annotations(
             opacity: ItemOpacity::Transparent,
             is_unsafe_function: Some(fun.signature.is_unsafe),
             is_opaque_function: Some(matches!(fun.body, Body::Opaque)),
+            has_verifiable_body: Some(matches!(
+                fun.body,
+                Body::Structured(_) | Body::Unstructured(_)
+            )),
         };
         maybe_push_annotation(
             &mut items,
@@ -340,6 +348,7 @@ struct ItemFacts {
     opacity: ItemOpacity,
     is_unsafe_function: Option<bool>,
     is_opaque_function: Option<bool>,
+    has_verifiable_body: Option<bool>,
 }
 
 impl ItemFacts {
@@ -349,6 +358,7 @@ impl ItemFacts {
             opacity: ItemOpacity::Transparent,
             is_unsafe_function: None,
             is_opaque_function: None,
+            has_verifiable_body: None,
         }
     }
 
@@ -375,6 +385,9 @@ fn validate_annotation(
                         || facts.opacity == ItemOpacity::Opaque
                     {
                         return Err(Error::SpecIsOpaque { path });
+                    }
+                    if facts.has_verifiable_body == Some(false) {
+                        return Err(Error::SpecHasNoBody { path });
                     }
                 }
                 FunctionAnnotationKind::UnsafeAxiom => {
@@ -632,6 +645,7 @@ mod tests {
             opacity: if is_opaque { ItemOpacity::Opaque } else { ItemOpacity::Transparent },
             is_unsafe_function: Some(is_unsafe),
             is_opaque_function: Some(is_opaque),
+            has_verifiable_body: Some(true),
         }
     }
 
@@ -716,6 +730,62 @@ mod tests {
         .unwrap_err();
 
         assert!(matches!(err, Error::SpecIsOpaque { .. }));
+    }
+
+    #[test]
+    fn spec_requires_verifiable_function_body() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::Spec,
+            sections: vec![AnnotationSection {
+                kind: SectionKind::Ensures,
+                name: Some("value".into()),
+                lean: "True".into(),
+            }],
+            argument_names: None,
+        };
+        let mut facts = function_facts(false, false);
+        facts.has_verifiable_body = Some(false);
+
+        let err = validate_annotation(
+            &annotation,
+            facts,
+            &["crate".into(), "AbstractVal".into(), "abstract_val".into()],
+        )
+        .unwrap_err();
+
+        assert!(matches!(err, Error::SpecHasNoBody { .. }));
+    }
+
+    #[test]
+    fn unsafe_axiom_allows_bodyless_opaque_function() {
+        let annotation = Annotation {
+            version: 1,
+            kind: AnnotationKind::UnsafeAxiom,
+            sections: vec![AnnotationSection {
+                kind: SectionKind::Ensures,
+                name: Some("value".into()),
+                lean: "True".into(),
+            }],
+            argument_names: None,
+        };
+        let mut facts = function_facts(false, true);
+        facts.has_verifiable_body = Some(false);
+
+        let body = validate_annotation(
+            &annotation,
+            facts,
+            &["crate".into(), "AbstractVal".into(), "abstract_val".into()],
+        )
+        .unwrap();
+
+        assert!(matches!(
+            body,
+            AnnotationBody::Function(FunctionAnnotation {
+                kind: FunctionAnnotationKind::UnsafeAxiom,
+                ..
+            })
+        ));
     }
 
     #[test]
