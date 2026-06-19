@@ -150,9 +150,7 @@ fn trait_impl_namespace(
         .get(trait_impl.impl_trait.id)
         .ok_or(Error::MissingTraitName { index: trait_impl.impl_trait.id.index() })?;
     let trait_path = item_path(krate, &trait_decl.item_meta.name)?;
-    if trait_path.crate_namespace != crate_namespace(krate)
-        || !trait_path.relative_namespace.is_empty()
-    {
+    if trait_path.crate_namespace != crate_namespace(krate) {
         return Err(Error::UnsupportedTraitImplPath);
     }
 
@@ -162,8 +160,7 @@ fn trait_impl_namespace(
         trait_impl_segment_for_ref(
             krate,
             &trait_impl.generics,
-            &trait_path.crate_namespace,
-            &trait_path.item,
+            &trait_path,
             &trait_impl.impl_trait.generics,
         )?,
     ])
@@ -189,17 +186,30 @@ fn adt_self_type_owner(krate: &TranslatedCrate, ty: &Ty) -> Result<String, Error
 }
 
 fn trait_impl_segment(crate_namespace: &str, trait_name: &str) -> String {
-    format!("{}{}", uppercase_first(crate_namespace), trait_name)
+    let path = LeanItemPath {
+        crate_namespace: crate_namespace.to_string(),
+        relative_namespace: Vec::new(),
+        item: trait_name.to_string(),
+    };
+    trait_impl_segment_base(&path)
+}
+
+fn trait_impl_segment_base(path: &LeanItemPath) -> String {
+    let mut segment = uppercase_first(&path.crate_namespace);
+    for namespace in &path.relative_namespace {
+        segment.push_str(&uppercase_first(namespace));
+    }
+    segment.push_str(&path.item);
+    segment
 }
 
 fn trait_impl_segment_for_ref(
     krate: &TranslatedCrate,
     impl_generics: &GenericParams,
-    crate_namespace: &str,
-    trait_name: &str,
+    trait_path: &LeanItemPath,
     trait_args: &GenericArgs,
 ) -> Result<String, Error> {
-    let mut segment = trait_impl_segment(crate_namespace, trait_name);
+    let mut segment = trait_impl_segment_base(trait_path);
     let rendered_args =
         crate::lean_types::render_generic_args_with_generics(krate, impl_generics, trait_args)?;
     for arg in rendered_args.into_iter().skip(1) {
@@ -349,6 +359,17 @@ mod tests {
             trait_impl_segment("anneal_v2_generate_smoke", "ReadVal"),
             "Anneal_v2_generate_smokeReadVal"
         );
+    }
+
+    #[test]
+    fn trait_impl_segment_includes_nested_trait_namespaces() {
+        let path = LeanItemPath {
+            crate_namespace: "test_impl".to_string(),
+            relative_namespace: vec!["inner".to_string()],
+            item: "ModRead".to_string(),
+        };
+
+        assert_eq!(trait_impl_segment_base(&path), "Test_implInnerModRead");
     }
 
     #[test]
