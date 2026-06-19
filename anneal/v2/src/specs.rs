@@ -657,7 +657,7 @@ fn proof_map<'a>(spec: &'a FunctionSpec<'_>) -> HashMap<&'a str, &'a str> {
     spec.annotation
         .proofs
         .iter()
-        .filter_map(|fragment| Some((fragment.name.as_deref()?, fragment.lean.as_str())))
+        .map(|fragment| (fragment.name.as_deref().unwrap_or("h_anon"), fragment.lean.as_str()))
         .collect()
 }
 
@@ -922,6 +922,34 @@ mod tests {
         assert!(out.contains("Aeneas.Std.WP.spec (incr x) (fun ret_ => Post x ret_)"));
         assert!(out.contains("have hx := h_pre\n"));
         assert!(out.contains("        result := by\n          simp_all\n"));
+    }
+
+    #[test]
+    fn renders_anonymous_proof_for_anonymous_postcondition() {
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::Spec,
+            context: Vec::new(),
+            requires: Vec::new(),
+            ensures: vec![fragment("ret.val = 0")],
+            proof_context: Vec::new(),
+            proofs: vec![fragment("simp_all")],
+        };
+        let spec = FunctionSpec {
+            path: path("zero"),
+            call_path: path("zero"),
+            generics: LeanGenerics::default(),
+            args: Vec::new(),
+            return_type: Some("Std.U32".to_string()),
+            annotation: &annotation,
+        };
+        let mut out = String::new();
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains(
+            "  h_anon : ret.val = 0 := by verify_user_bound h_anon _root_.test_impl.zero\n"
+        ));
+        assert!(out.contains("        h_anon := by\n          simp_all\n"));
     }
 
     #[test]
