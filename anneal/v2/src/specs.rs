@@ -7,8 +7,8 @@ use anyhow::Context as _;
 use std::collections::HashMap;
 
 use charon_lib::ast::{
-    Body, FunDecl, FunDeclId, GenericParams, Local, RefKind, TraitDeclId, TraitDeclRef, Ty, TyKind,
-    TypeDeclId, TypeId,
+    Body, FunDecl, FunDeclId, GenericParams, ItemSource, Local, RefKind, TraitDeclId, TraitDeclRef,
+    Ty, TyKind, TypeDeclId, TypeId,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -137,6 +137,7 @@ struct FunctionArg {
 #[derive(Debug)]
 struct FunctionSpec<'a> {
     path: crate::names::LeanItemPath,
+    call_path: crate::names::LeanItemPath,
     generics: LeanGenerics,
     args: Vec<FunctionArg>,
     return_type: Option<String>,
@@ -149,7 +150,7 @@ impl FunctionSpec<'_> {
     }
 
     fn aeneas_name(&self) -> String {
-        self.path.aeneas_name()
+        self.call_path.aeneas_name()
     }
 
     fn fully_qualified_aeneas_name(&self) -> String {
@@ -166,6 +167,7 @@ fn function_spec<'a>(
     let path = item.path.join("::");
     let generics = lean_generics(krate, &fun.generics, &path)?;
     let item_path = crate::names::item_path(krate, &fun.item_meta.name)?;
+    let call_path = function_call_path(&item_path, fun);
     let args = function_args(krate, fun, item)?;
     let return_type = if is_unit_type(&fun.signature.output) {
         None
@@ -176,7 +178,24 @@ fn function_spec<'a>(
             &fun.signature.output,
         )?)
     };
-    Ok(FunctionSpec { path: item_path, generics, args, return_type, annotation })
+    Ok(FunctionSpec { path: item_path, call_path, generics, args, return_type, annotation })
+}
+
+fn function_call_path(
+    path: &crate::names::LeanItemPath,
+    fun: &FunDecl,
+) -> crate::names::LeanItemPath {
+    if matches!(fun.src, ItemSource::TraitDecl { has_default: true, .. }) {
+        let mut relative_namespace = path.relative_namespace.clone();
+        relative_namespace.push(path.item.clone());
+        crate::names::LeanItemPath {
+            crate_namespace: path.crate_namespace.clone(),
+            relative_namespace,
+            item: "default".to_string(),
+        }
+    } else {
+        path.clone()
+    }
 }
 
 fn function_args(
@@ -551,7 +570,7 @@ fn function_context_arg_names(spec: &FunctionSpec<'_>) -> Vec<String> {
 }
 
 fn function_call(spec: &FunctionSpec<'_>) -> String {
-    let mut parts = vec![spec.path.item.clone()];
+    let mut parts = vec![spec.call_path.item.clone()];
     parts.extend(spec.generics.type_params.iter().map(|param| format!("({param} := {param})")));
     parts.extend(
         spec.generics
@@ -875,6 +894,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: path("incr"),
+            call_path: path("incr"),
             generics: LeanGenerics::default(),
             args: vec![FunctionArg {
                 name: "x".to_string(),
@@ -916,6 +936,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: path("read"),
+            call_path: path("read"),
             generics: LeanGenerics::default(),
             args: Vec::new(),
             return_type: Some("Std.U32".to_string()),
@@ -981,6 +1002,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: path("generic_id"),
+            call_path: path("generic_id"),
             generics,
             args: vec![FunctionArg {
                 name: "x".to_string(),
@@ -1014,6 +1036,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: path("bound_id"),
+            call_path: path("bound_id"),
             generics: LeanGenerics {
                 type_params: vec!["T".to_string(), "U".to_string()],
                 const_params: Vec::new(),
@@ -1061,6 +1084,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: nested_path(&["Positive"], "get"),
+            call_path: nested_path(&["Positive"], "get"),
             generics: LeanGenerics::default(),
             args: vec![FunctionArg {
                 name: "self".to_string(),
@@ -1092,6 +1116,7 @@ mod tests {
         };
         let spec = FunctionSpec {
             path: path("keep_mut"),
+            call_path: path("keep_mut"),
             generics: LeanGenerics::default(),
             args: vec![FunctionArg {
                 name: "x".to_string(),
@@ -1113,6 +1138,49 @@ mod tests {
         assert!(out.contains("  · rintro x' h_returns\n"));
         assert!(out.contains("        h_x'_is_valid := by\n"));
         assert!(out.contains("        result := by\n          simp_all [keep_mut]\n"));
+    }
+
+    #[test]
+    fn renders_trait_default_method_call_path() {
+        let annotation = FunctionAnnotation {
+            kind: FunctionAnnotationKind::Spec,
+            context: Vec::new(),
+            requires: Vec::new(),
+            ensures: vec![named_fragment("result", "ret.val = 0")],
+            proof_context: Vec::new(),
+            proofs: vec![named_fragment("result", "simp_all [DefaultVal.default_val.default]")],
+        };
+        let spec = FunctionSpec {
+            path: nested_path(&["DefaultVal"], "default_val"),
+            call_path: nested_path(&["DefaultVal", "default_val"], "default"),
+            generics: LeanGenerics {
+                type_params: vec!["Self".to_string()],
+                const_params: Vec::new(),
+                trait_dicts: Vec::new(),
+            },
+            args: vec![FunctionArg {
+                name: "self".to_string(),
+                lean_type: "Self".to_string(),
+                is_mut_ref: false,
+            }],
+            return_type: Some("Std.U32".to_string()),
+            annotation: &annotation,
+        };
+        let mut out = String::new();
+
+        render_function(&spec, &mut out);
+
+        assert!(out.contains("namespace DefaultVal\n\nnamespace default_val\n\n"));
+        assert!(out.contains(
+            "verify_user_bound result _root_.test_impl.DefaultVal.default_val.default\n"
+        ));
+        assert!(out.contains(
+            "Aeneas.Std.WP.spec (default (Self := Self) self) (fun ret_ => Post self ret_)"
+        ));
+        assert!(out.contains(
+            "        result := by\n          simp_all [DefaultVal.default_val.default]\n"
+        ));
+        assert!(out.contains("\nend default_val\n\nend DefaultVal\n"));
     }
 
     #[test]
