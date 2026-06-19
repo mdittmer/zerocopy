@@ -300,7 +300,7 @@ fn lean_trait_dicts(
     params: &GenericParams,
     path: &str,
 ) -> Result<Vec<LeanTraitDict>, Error> {
-    let mut used_names = HashMap::<String, ()>::new();
+    let mut used_names = HashMap::<String, usize>::new();
     params
         .trait_clauses
         .iter()
@@ -317,16 +317,21 @@ fn lean_trait_dicts(
                 .get(trait_ref.id)
                 .ok_or(Error::MissingDecl { kind: "trait", index: trait_ref.id.index() })?;
             let trait_path = crate::names::item_path(krate, &trait_decl.item_meta.name)?;
-            let name = format!("{}Inst", trait_path.item);
-            if used_names.insert(name.clone(), ()).is_some() {
-                return Err(Error::UnsupportedGenerics { path: path.to_string() });
-            }
+            let name =
+                disambiguated_dict_name(&mut used_names, &format!("{}Inst", trait_path.item));
             Ok(LeanTraitDict {
                 name,
                 lean_type: trait_dict_type(krate, params, &trait_path, trait_ref)?,
             })
         })
         .collect()
+}
+
+fn disambiguated_dict_name(used_names: &mut HashMap<String, usize>, base: &str) -> String {
+    let count = used_names.entry(base.to_string()).or_default();
+    let name = if *count == 0 { base.to_string() } else { format!("{base}{count}") };
+    *count += 1;
+    name
 }
 
 fn trait_dict_type(
@@ -1098,6 +1103,16 @@ mod tests {
             "Aeneas.Std.WP.spec (bound_id (T := T) (U := U) SafeTraitInst x) (fun ret_ => Post SafeTraitInst x ret_)"
         ));
         assert!(out.contains("        result := by\n          simp_all [bound_id]\n"));
+    }
+
+    #[test]
+    fn disambiguates_duplicate_trait_dictionary_names() {
+        let mut used_names = HashMap::<String, usize>::new();
+
+        assert_eq!(disambiguated_dict_name(&mut used_names, "SafeTraitInst"), "SafeTraitInst");
+        assert_eq!(disambiguated_dict_name(&mut used_names, "SafeTraitInst"), "SafeTraitInst1");
+        assert_eq!(disambiguated_dict_name(&mut used_names, "SafeTraitInst"), "SafeTraitInst2");
+        assert_eq!(disambiguated_dict_name(&mut used_names, "OtherTraitInst"), "OtherTraitInst");
     }
 
     #[test]
