@@ -140,4 +140,8 @@ fn test_generate_subcommand_simple() {
     }
 
     assert!(found_lean, "No generated .lean files found in {:?}", lean_output_dir);
+    assert!(lean_output_dir.join("Generated.lean").is_file());
+    assert!(lean_output_dir.join("lakefile.lean").is_file());
+    assert!(lean_output_dir.join("lake-manifest.json").is_file());
+    assert!(lean_output_dir.join("lean-toolchain").is_file());
 }
