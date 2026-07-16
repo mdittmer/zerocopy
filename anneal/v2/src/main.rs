@@ -13,6 +13,7 @@ use clap::Parser as _;
 mod aeneas;
 mod annotations;
 mod charon;
+mod lake;
 mod resolve;
 mod scanner;
 mod setup;
@@ -75,6 +76,10 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub no_progress: bool,
 
+    /// Generate Lean files and workspace metadata, but do not run Lake
+    #[arg(long)]
+    pub no_lean_build: bool,
+
     /// Recursively compile and translate all third-party dependencies to LLBC
     #[arg(long)]
     pub include_dependencies: bool,
@@ -120,6 +125,10 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         show_progress,
     )?;
     crate::aeneas::run_aeneas(&toolchain, &locked_roots, &packages, show_progress)?;
+    crate::lake::prepare_workspace(&toolchain, &locked_roots, &packages)?;
+    if !args.no_lean_build {
+        crate::lake::build_workspace(&toolchain, &locked_roots, show_progress)?;
+    }
     Ok(())
 }
 
@@ -174,6 +183,16 @@ mod tests {
                 toolchain.aeneas_bin_dir()
             );
             assert!(
+                toolchain.aeneas_lean_dir().is_dir(),
+                "aeneas_lean_dir is not a directory: {:?}",
+                toolchain.aeneas_lean_dir()
+            );
+            assert!(
+                toolchain.lean_root().is_dir(),
+                "lean_root is not a directory: {:?}",
+                toolchain.lean_root()
+            );
+            assert!(
                 toolchain.rust_sysroot().is_dir(),
                 "rust_sysroot is not a directory: {:?}",
                 toolchain.rust_sysroot()
@@ -197,6 +216,11 @@ mod tests {
                 crate::setup::Tool::Cargo.path(&toolchain).is_file(),
                 "cargo is not a file: {:?}",
                 crate::setup::Tool::Cargo.path(&toolchain)
+            );
+            assert!(
+                crate::setup::Tool::Lake.path(&toolchain).is_file(),
+                "lake is not a file: {:?}",
+                crate::setup::Tool::Lake.path(&toolchain)
             );
             assert!(
                 crate::setup::Tool::Rustc.path(&toolchain).is_file(),
