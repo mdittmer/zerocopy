@@ -35,7 +35,7 @@ pub fn prepare_workspace(
         format!("Failed to write {}", workspace.join("Generated.lean").display())
     })?;
 
-    write_lakefile(&workspace, &toolchain.aeneas_lean_dir())?;
+    write_lakefile(&workspace, &toolchain.aeneas_lean_dir(), &imports)?;
     copy_workspace_file(
         &toolchain.aeneas_lean_dir().join("lean-toolchain"),
         &workspace.join("lean-toolchain"),
@@ -163,7 +163,9 @@ fn module_name_from_path(
 fn write_lakefile(
     workspace: &std::path::Path,
     aeneas_lean: &std::path::Path,
+    imports: &[String],
 ) -> anyhow::Result<()> {
+    let roots = lake_roots(imports);
     let contents = format!(
         r#"import Lake
 open Lake DSL
@@ -175,12 +177,21 @@ package «anneal_verification»
 @[default_target]
 lean_lib «Generated» where
   srcDir := "."
-  roots := #[`Generated]
+  roots := #[{}]
 "#,
-        lake_string(aeneas_lean)
+        lake_string(aeneas_lean),
+        roots.join(", ")
     );
     std::fs::write(workspace.join("lakefile.lean"), contents)
         .with_context(|| format!("Failed to write {}", workspace.join("lakefile.lean").display()))
+}
+
+fn lake_roots(imports: &[String]) -> Vec<String> {
+    let mut roots = vec!["`Generated".to_string()];
+    roots.extend(imports.iter().map(|module| format!("`{module}")));
+    roots.sort();
+    roots.dedup();
+    roots
 }
 
 fn write_lake_manifest(
@@ -297,6 +308,21 @@ mod tests {
         std::fs::write(artifact.join("FunsExternal_Template.lean"), "").unwrap();
 
         assert_eq!(module_imports(temp.path(), &artifact).unwrap(), vec!["Demo.Types"]);
+    }
+
+    #[test]
+    fn lake_roots_include_generated_and_imported_modules() {
+        let imports = vec![
+            "Demo.Funs".to_string(),
+            "Demo.Soundness".to_string(),
+            "Demo.Types".to_string(),
+            "Demo.Funs".to_string(),
+        ];
+
+        assert_eq!(
+            lake_roots(&imports),
+            vec!["`Demo.Funs", "`Demo.Soundness", "`Demo.Types", "`Generated"]
+        );
     }
 
     #[test]
