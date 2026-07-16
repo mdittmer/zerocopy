@@ -30,7 +30,7 @@ pub use schema::AnnotationTarget;
 pub type Attributes = Vec<Attribute>;
 
 /// One decoded `#[anneal(...)]` entry.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Attribute {
     /// Semantic content of the attribute.
     pub data: AttributeData,
@@ -51,7 +51,7 @@ impl Attribute {
 }
 
 /// Decoded Anneal attribute content.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AttributeData {
     /// Preconditions, postconditions, and invariants.
     Spec(Spec),
@@ -68,7 +68,7 @@ impl Default for AttributeData {
 }
 
 /// Function or type specifications.
-#[derive(Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Spec {
     /// Preconditions.
     pub requires: Vec<Prop>,
@@ -79,7 +79,7 @@ pub struct Spec {
 }
 
 /// A proposition. The initial v2 implementation supports only Lean source.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Prop {
     /// A proposition expressed as Lean source code.
     Lean(LeanProp),
@@ -98,7 +98,7 @@ impl From<&str> for Prop {
 }
 
 /// A Lean proposition and optional Lean attributes attached to it.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeanProp {
     pub attrs: LeanAttrs,
     pub prop: String,
@@ -117,7 +117,7 @@ impl From<&str> for LeanProp {
 }
 
 /// An auxiliary theorem that may be referenced by generated proofs.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Theorem {
     /// Lean attributes attached to the theorem declaration.
     pub attrs: LeanAttrs,
@@ -128,14 +128,14 @@ pub struct Theorem {
 }
 
 /// Theorem definition language.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum TheoremDefinition {
     /// A theorem definition written in Lean.
     Lean(LeanTheoremDefinition),
 }
 
 /// A theorem definition written in Lean.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeanTheoremDefinition {
     /// Arguments passed to the theorem.
     pub args: Vec<LeanArgs>,
@@ -146,7 +146,7 @@ pub struct LeanTheoremDefinition {
 }
 
 /// Arguments passed to a Lean function, theorem, or definition.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeanArgs {
     /// Structured arguments expressed using slice-like syntax.
     Args(Vec<LeanArg>),
@@ -161,7 +161,7 @@ impl From<String> for LeanArgs {
 }
 
 /// One Lean argument declaration.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeanArg {
     /// Structured argument written as `"name" : "Type"`.
     Arg { name: String, ty: LeanType },
@@ -176,11 +176,11 @@ impl From<String> for LeanArg {
 }
 
 /// Reference to a Lean type.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeanType(pub String);
 
 /// Lean attributes attached to a definition, theorem, proposition, etc.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeanAttrs {
     /// Structured attributes.
     Attrs(Vec<LeanAttr>),
@@ -213,7 +213,7 @@ impl LeanAttrs {
 }
 
 /// One Lean attribute.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeanAttr {
     /// Inline Lean attribute text.
     AttrString(String),
@@ -232,7 +232,7 @@ impl From<&str> for LeanAttr {
 }
 
 /// A Lean proof fragment.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Proof {
     /// A proof implemented in Lean.
     Lean(LeanProof),
@@ -245,7 +245,7 @@ impl Default for Proof {
 }
 
 /// A Lean proof fragment.
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LeanProof {
     /// Tactic-style proof inserted after `:= by`.
     TacticProof(String),
