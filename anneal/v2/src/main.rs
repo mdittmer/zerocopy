@@ -111,7 +111,8 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         log::warn!("No targets found to generate.");
         return Ok(());
     }
-    crate::annotation_scan::scan_workspace(&roots.metadata)?.reject_unimplemented_soundness()?;
+    let annotations = crate::annotation_scan::scan_packages(&packages)?;
+    annotations.reject_unsupported()?;
     let mut locked_roots = roots.lock_run_root()?;
     if let Some(output_dir) = args.output_dir {
         locked_roots.llbc_override = Some(output_dir);
@@ -128,7 +129,12 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         show_progress,
     )?;
     crate::aeneas::run_aeneas(&toolchain, &locked_roots, &packages, show_progress)?;
-    crate::soundness::write_default_soundness(&locked_roots, &packages)?;
+    crate::soundness::write_soundness(
+        &locked_roots,
+        &packages,
+        &annotations,
+        args.resolve_args.allow_sorry,
+    )?;
     crate::lake::prepare_workspace(&toolchain, &locked_roots, &packages)?;
     if !args.no_lean_build {
         crate::lake::build_workspace(&toolchain, &locked_roots, show_progress)?;
