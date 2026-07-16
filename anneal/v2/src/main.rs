@@ -18,6 +18,7 @@ mod lake;
 mod resolve;
 mod scanner;
 mod setup;
+mod soundness;
 mod util;
 
 /// Anneal
@@ -127,6 +128,7 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         show_progress,
     )?;
     crate::aeneas::run_aeneas(&toolchain, &locked_roots, &packages, show_progress)?;
+    crate::soundness::write_default_soundness(&locked_roots, &packages)?;
     crate::lake::prepare_workspace(&toolchain, &locked_roots, &packages)?;
     if !args.no_lean_build {
         crate::lake::build_workspace(&toolchain, &locked_roots, show_progress)?;
