@@ -185,7 +185,12 @@ pub struct Roots {
 impl Roots {
     pub fn lock_run_root(&self) -> anyhow::Result<LockedRoots<'_>> {
         let lock = crate::util::DirLock::lock_exclusive(self.anneal_run_root.clone())?;
-        Ok(LockedRoots { roots: self, anneal_run_root: lock, llbc_override: None })
+        Ok(LockedRoots {
+            roots: self,
+            anneal_run_root: lock,
+            llbc_override: None,
+            lean_override: None,
+        })
     }
 
     pub fn cargo_target_dir(&self) -> std::path::PathBuf {
@@ -202,6 +207,7 @@ pub struct LockedRoots<'a> {
     roots: &'a Roots,
     anneal_run_root: crate::util::DirLock,
     pub llbc_override: Option<std::path::PathBuf>,
+    pub lean_override: Option<std::path::PathBuf>,
 }
 
 impl<'a> LockedRoots<'a> {
@@ -210,6 +216,14 @@ impl<'a> LockedRoots<'a> {
             over.clone()
         } else {
             self.anneal_run_root.path.join("llbc")
+        }
+    }
+
+    pub fn lean_root(&self) -> std::path::PathBuf {
+        if let Some(ref over) = self.lean_override {
+            over.clone()
+        } else {
+            self.anneal_run_root.path.join("lean")
         }
     }
 

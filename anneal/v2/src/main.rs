@@ -10,6 +10,7 @@
 use anyhow::Context as _;
 use clap::Parser as _;
 
+mod aeneas;
 mod annotations;
 mod charon;
 mod resolve;
@@ -29,7 +30,7 @@ struct Cli {
 enum Commands {
     /// Setup Anneal dependencies
     Setup(SetupArgs),
-    /// Generate LLBC for a crate (runs Charon)
+    /// Generate LLBC and Lean for a crate (runs Charon and Aeneas)
     Generate(GenerateArgs),
 
     /// Helper to acquire shared or exclusive locks for multi-process integration testing (dev only)
@@ -65,6 +66,10 @@ pub struct GenerateArgs {
     /// Controls where LLBC output is placed on the filesystem
     #[arg(long, value_name = "output-dir")]
     pub output_dir: Option<std::path::PathBuf>,
+
+    /// Controls where generated Lean output is placed on the filesystem
+    #[arg(long, value_name = "lean-output-dir")]
+    pub lean_output_dir: Option<std::path::PathBuf>,
 
     /// Do not show compilation progress bars
     #[arg(long)]
@@ -103,6 +108,9 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     if let Some(output_dir) = args.output_dir {
         locked_roots.llbc_override = Some(output_dir);
     }
+    if let Some(lean_output_dir) = args.lean_output_dir {
+        locked_roots.lean_override = Some(lean_output_dir);
+    }
     let show_progress = !args.no_progress;
     crate::charon::run_charon(
         &args.resolve_args,
@@ -111,6 +119,7 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &packages,
         show_progress,
     )?;
+    crate::aeneas::run_aeneas(&toolchain, &locked_roots, &packages, show_progress)?;
     Ok(())
 }
 
@@ -178,6 +187,11 @@ mod tests {
                 toolchain.rust_lib().is_dir(),
                 "rust_lib is not a directory: {:?}",
                 toolchain.rust_lib()
+            );
+            assert!(
+                crate::setup::Tool::Aeneas.path(&toolchain).is_file(),
+                "aeneas is not a file: {:?}",
+                crate::setup::Tool::Aeneas.path(&toolchain)
             );
             assert!(
                 crate::setup::Tool::Cargo.path(&toolchain).is_file(),
