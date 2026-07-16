@@ -300,16 +300,6 @@ fn record_function_attrs(
         return Ok(());
     }
 
-    if !spec.requires.is_empty() {
-        push_unsupported(
-            scan,
-            path,
-            target,
-            Some(rust_name.clone()),
-            "preconditions are parsed but not integrated into generated soundness theorems yet",
-        );
-        supported = false;
-    }
     if !spec.invariants.is_empty() {
         push_unsupported(
             scan,
@@ -320,7 +310,7 @@ fn record_function_attrs(
         );
         supported = false;
     }
-    if spec.ensures.is_empty() {
+    if spec.requires.is_empty() && spec.ensures.is_empty() {
         if proof.is_some() {
             push_unsupported(
                 scan,
@@ -437,7 +427,7 @@ mod tests {
     }
 
     #[test]
-    fn scan_file_rejects_preconditions_until_supported() {
+    fn scan_file_records_preconditions() {
         let temp = tempfile::tempdir().unwrap();
         let path = temp.path().join("lib.rs");
         std::fs::write(
@@ -452,9 +442,52 @@ mod tests {
         let mut scan = AnnotationScan::default();
         scan_file(&mut scan, &temp.path().join("Cargo.toml"), &path).unwrap();
 
+        assert_eq!(scan.function_specs.len(), 1);
+        assert_eq!(scan.function_specs[0].spec.requires.len(), 1);
+        assert_eq!(scan.function_specs[0].spec.ensures.len(), 1);
+        scan.reject_unsupported().unwrap();
+    }
+
+    #[test]
+    fn scan_file_records_precondition_only_specs() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("lib.rs");
+        std::fs::write(
+            &path,
+            r#"
+            #[anneal(spec(requires = "x.val > 0"))]
+            pub fn f(x: u32) -> u32 { x }
+            "#,
+        )
+        .unwrap();
+
+        let mut scan = AnnotationScan::default();
+        scan_file(&mut scan, &temp.path().join("Cargo.toml"), &path).unwrap();
+
+        assert_eq!(scan.function_specs.len(), 1);
+        assert_eq!(scan.function_specs[0].spec.requires.len(), 1);
+        scan.reject_unsupported().unwrap();
+    }
+
+    #[test]
+    fn scan_file_rejects_invariants_until_supported() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("lib.rs");
+        std::fs::write(
+            &path,
+            r#"
+            #[anneal(spec(invariant = "Counter.Valid self"))]
+            pub fn f(x: u32) -> u32 { x }
+            "#,
+        )
+        .unwrap();
+
+        let mut scan = AnnotationScan::default();
+        scan_file(&mut scan, &temp.path().join("Cargo.toml"), &path).unwrap();
+
         assert!(scan.function_specs.is_empty());
         let err = scan.reject_unsupported().unwrap_err().to_string();
-        assert!(err.contains("preconditions are parsed"));
+        assert!(err.contains("invariants are parsed"));
     }
 
     #[test]

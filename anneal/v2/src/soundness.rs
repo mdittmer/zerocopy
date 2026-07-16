@@ -119,14 +119,18 @@ fn soundness_module(
 
     let mut matched_specs = Vec::new();
     for (spec_idx, spec) in specs {
-        let matches =
-            defs.iter().filter(|def| def.rust_basename() == spec.rust_name).collect::<Vec<_>>();
+        let matches = defs
+            .iter()
+            .enumerate()
+            .filter(|(_, def)| def.rust_basename() == spec.rust_name)
+            .collect::<Vec<_>>();
         match matches.as_slice() {
             [] => {}
-            [def] => {
+            [(def_idx, def)] => {
                 matched_specs.push(*spec_idx);
                 out.push_str(&annotated_soundness_theorem(
                     matched_specs.len() - 1,
+                    *def_idx,
                     def,
                     spec,
                     allow_sorry,
@@ -137,7 +141,7 @@ fn soundness_module(
                     "Anneal spec for `{}` in {} is ambiguous across generated Aeneas definitions: {}",
                     spec.rust_name,
                     spec.path.display(),
-                    matches.iter().map(|def| def.name.as_str()).collect::<Vec<_>>().join(", ")
+                    matches.iter().map(|(_, def)| def.name.as_str()).collect::<Vec<_>>().join(", ")
                 );
             }
         }
@@ -149,6 +153,7 @@ fn soundness_module(
 
 fn annotated_soundness_theorem(
     idx: usize,
+    default_idx: usize,
     def: &ResultDef,
     spec: &crate::annotation_scan::FunctionSpec,
     allow_sorry: bool,
@@ -163,6 +168,11 @@ fn annotated_soundness_theorem(
         out.push(' ');
         out.push_str(&def.binders.join(" "));
     }
+    if !spec.spec.requires.is_empty() {
+        out.push_str(" (required' : ");
+        out.push_str(&prop_conjunction(&spec.spec.requires));
+        out.push(')');
+    }
     out.push_str(" :\n");
     out.push_str("  ⊢ₛ wp⟦");
     out.push_str(&def.application());
@@ -171,7 +181,12 @@ fn annotated_soundness_theorem(
     out.push_str("⌝,\n");
     out.push_str("                fun _ => ⌜True⌝,\n");
     out.push_str("                fun () => ⌜True⌝⟩");
-    out.push_str(&proof_body(spec.proof.as_ref(), allow_sorry, spec)?);
+    let fallback_proof = if spec.spec.ensures.is_empty() {
+        Some(format!("anneal_default_soundness_{default_idx}"))
+    } else {
+        None
+    };
+    out.push_str(&proof_body(spec.proof.as_ref(), allow_sorry, spec, fallback_proof.as_deref())?);
     out.push('\n');
     Ok(out)
 }
@@ -198,6 +213,7 @@ fn proof_body(
     proof: Option<&Proof>,
     allow_sorry: bool,
     spec: &crate::annotation_scan::FunctionSpec,
+    fallback_proof: Option<&str>,
 ) -> anyhow::Result<String> {
     match proof {
         Some(Proof::Lean(LeanProof::TacticProof(proof))) => {
@@ -206,10 +222,13 @@ fn proof_body(
         Some(Proof::Lean(LeanProof::TermProof(proof))) => {
             Ok(format!(" :=\n{}\n", indent_lean_block(proof)))
         }
+        None if fallback_proof.is_some() => {
+            Ok(format!(" := by\n  exact {}\n", fallback_proof.unwrap()))
+        }
         None if allow_sorry => Ok(" := by\n  sorry\n".into()),
         None => {
             anyhow::bail!(
-                "Anneal soundness postcondition for `{}` in {} has no proof; add a `proof` annotation or pass `--allow-sorry`",
+                "Anneal soundness obligation for `{}` in {} has no proof; add a `proof` annotation or pass `--allow-sorry`",
                 spec.rust_name,
                 spec.path.display()
             );
@@ -498,6 +517,69 @@ end demo
             "theorem anneal_soundness_0_f (x : Std.U32) :\n  ⊢ₛ wp⟦f x⟧ post⟨fun result => ⌜(result.val >= x.val)⌝,"
         ));
         assert!(generated.lean.contains(" := by\n  simp\n"));
+    }
+
+    #[test]
+    fn emits_precondition_as_named_hypothesis() {
+        let temp = tempfile::tempdir().unwrap();
+        let spec = crate::annotation_scan::FunctionSpec {
+            package_manifest_path: temp.path().join("Cargo.toml"),
+            path: temp.path().join("src/lib.rs"),
+            rust_name: "f".into(),
+            spec: crate::annotations::Spec {
+                requires: vec![crate::annotations::Prop::from("x.val > 0")],
+                ensures: vec![crate::annotations::Prop::from("result.val >= x.val")],
+                invariants: vec![],
+            },
+            proof: Some(crate::annotations::Proof::Lean(
+                crate::annotations::LeanProof::TacticProof("simp".into()),
+            )),
+        };
+        let funs = r#"
+namespace demo
+
+def f (x : Std.U32) : Result Std.U32 := do
+  ok x
+
+end demo
+"#;
+
+        let generated = soundness_module("Demo", funs, &[(0, &spec)], false).unwrap().unwrap();
+
+        assert!(
+            generated
+                .lean
+                .contains("theorem anneal_soundness_0_f (x : Std.U32) (required' : (x.val > 0)) :")
+        );
+    }
+
+    #[test]
+    fn precondition_only_specs_fall_back_to_default_weak_theorem() {
+        let temp = tempfile::tempdir().unwrap();
+        let spec = crate::annotation_scan::FunctionSpec {
+            package_manifest_path: temp.path().join("Cargo.toml"),
+            path: temp.path().join("src/lib.rs"),
+            rust_name: "f".into(),
+            spec: crate::annotations::Spec {
+                requires: vec![crate::annotations::Prop::from("x.val > 0")],
+                ensures: vec![],
+                invariants: vec![],
+            },
+            proof: None,
+        };
+        let funs = r#"
+namespace demo
+
+def f (x : Std.U32) : Result Std.U32 := do
+  ok x
+
+end demo
+"#;
+
+        let generated = soundness_module("Demo", funs, &[(0, &spec)], false).unwrap().unwrap();
+
+        assert!(generated.lean.contains("fun result => ⌜True⌝,"));
+        assert!(generated.lean.contains(" := by\n  exact anneal_default_soundness_0\n"));
     }
 
     #[test]
