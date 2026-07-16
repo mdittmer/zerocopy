@@ -10,6 +10,7 @@
 use anyhow::Context as _;
 use clap::Parser as _;
 
+mod annotations;
 mod charon;
 mod resolve;
 mod scanner;
