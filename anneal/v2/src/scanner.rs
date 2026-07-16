@@ -113,4 +113,9 @@ impl AnnealArtifact {
     pub fn llbc_path(&self, roots: &crate::resolve::LockedRoots) -> std::path::PathBuf {
         roots.llbc_root().join(self.llbc_file_name())
     }
+
+    /// Returns the directory where Aeneas should emit split Lean files for this artifact.
+    pub fn lean_dir_path(&self, roots: &crate::resolve::LockedRoots) -> std::path::PathBuf {
+        roots.lean_root().join(self.artifact_slug())
+    }
 }
