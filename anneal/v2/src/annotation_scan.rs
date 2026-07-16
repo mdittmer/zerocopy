@@ -11,12 +11,13 @@
 
 use anyhow::Context as _;
 
-use crate::annotations::{AnnotationTarget, AttributeData, Proof, Spec};
+use crate::annotations::{AnnotationTarget, AttributeData, Proof, Spec, Theorem};
 
 /// Anneal attributes found while scanning Rust sources.
 #[derive(Debug, Default)]
 pub struct AnnotationScan {
     function_specs: Vec<FunctionSpec>,
+    aux_theorems: Vec<AuxTheorem>,
     unsupported: Vec<UnsupportedAnnotation>,
 }
 
@@ -24,6 +25,11 @@ impl AnnotationScan {
     /// Function-level postcondition specs that the current generator supports.
     pub fn function_specs(&self) -> &[FunctionSpec] {
         &self.function_specs
+    }
+
+    /// Auxiliary Lean theorem declarations from soundness-domain annotations.
+    pub fn aux_theorems(&self) -> &[AuxTheorem] {
+        &self.aux_theorems
     }
 
     /// Fails if soundness-domain annotations were found but cannot yet be interpreted.
@@ -61,6 +67,13 @@ pub struct FunctionSpec {
     pub rust_name: String,
     pub spec: Spec,
     pub proof: Option<Proof>,
+}
+
+#[derive(Debug)]
+pub struct AuxTheorem {
+    pub package_manifest_path: std::path::PathBuf,
+    pub path: std::path::PathBuf,
+    pub theorem: Theorem,
 }
 
 #[derive(Debug)]
@@ -141,14 +154,29 @@ fn scan_items(
                 &item.attrs,
             )?,
             syn::Item::Struct(item) => {
-                record_attrs(scan, path, AnnotationTarget::Struct, None, &item.attrs)?;
+                record_attrs(
+                    scan,
+                    package_manifest_path,
+                    path,
+                    AnnotationTarget::Struct,
+                    None,
+                    &item.attrs,
+                )?;
                 for field in &item.fields {
-                    record_attrs(scan, path, AnnotationTarget::Other, None, &field.attrs)?;
+                    record_attrs(
+                        scan,
+                        package_manifest_path,
+                        path,
+                        AnnotationTarget::Other,
+                        None,
+                        &field.attrs,
+                    )?;
                 }
             }
             syn::Item::Trait(item) => {
                 record_attrs(
                     scan,
+                    package_manifest_path,
                     path,
                     AnnotationTarget::Trait,
                     Some(item.ident.to_string()),
@@ -168,7 +196,14 @@ fn scan_items(
                 }
             }
             syn::Item::Impl(item) => {
-                record_attrs(scan, path, AnnotationTarget::Impl, None, &item.attrs)?;
+                record_attrs(
+                    scan,
+                    package_manifest_path,
+                    path,
+                    AnnotationTarget::Impl,
+                    None,
+                    &item.attrs,
+                )?;
                 for impl_item in &item.items {
                     if let syn::ImplItem::Fn(function) = impl_item {
                         record_function_attrs(
@@ -185,6 +220,7 @@ fn scan_items(
             syn::Item::Mod(item) => {
                 record_attrs(
                     scan,
+                    package_manifest_path,
                     path,
                     AnnotationTarget::Other,
                     Some(item.ident.to_string()),
@@ -195,7 +231,14 @@ fn scan_items(
                 }
             }
             item => {
-                record_attrs(scan, path, AnnotationTarget::Other, None, item_attrs(item))?;
+                record_attrs(
+                    scan,
+                    package_manifest_path,
+                    path,
+                    AnnotationTarget::Other,
+                    None,
+                    item_attrs(item),
+                )?;
             }
         }
     }
@@ -219,6 +262,7 @@ fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {
 
 fn record_attrs(
     scan: &mut AnnotationScan,
+    package_manifest_path: &std::path::Path,
     path: &std::path::Path,
     target: AnnotationTarget,
     rust_name: Option<String>,
@@ -226,13 +270,24 @@ fn record_attrs(
 ) -> anyhow::Result<()> {
     let attrs = crate::annotations::parse_attributes_for_target(attrs, target)
         .with_context(|| format!("failed to parse Anneal attributes in {}", path.display()))?;
-    if attrs.iter().any(is_soundness_attr) {
-        scan.unsupported.push(UnsupportedAnnotation {
-            path: path.to_path_buf(),
-            rust_name,
-            target,
-            reason: format!("soundness annotations on {target:?} are not implemented yet"),
-        });
+    for attr in attrs.into_iter().filter(is_soundness_attr) {
+        match attr.data {
+            AttributeData::Theorem(theorem) => {
+                scan.aux_theorems.push(AuxTheorem {
+                    package_manifest_path: package_manifest_path.to_path_buf(),
+                    path: path.to_path_buf(),
+                    theorem,
+                });
+            }
+            AttributeData::Spec(_) | AttributeData::Proof(_) => {
+                scan.unsupported.push(UnsupportedAnnotation {
+                    path: path.to_path_buf(),
+                    rust_name: rust_name.clone(),
+                    target,
+                    reason: format!("soundness annotations on {target:?} are not implemented yet"),
+                });
+            }
+        }
     }
     Ok(())
 }
@@ -272,15 +327,12 @@ fn record_function_attrs(
                     supported = false;
                 }
             }
-            AttributeData::Theorem(_) => {
-                push_unsupported(
-                    scan,
-                    path,
-                    target,
-                    Some(rust_name.clone()),
-                    "theorem annotations are parsed but not integrated into soundness generation yet",
-                );
-                supported = false;
+            AttributeData::Theorem(theorem) => {
+                scan.aux_theorems.push(AuxTheorem {
+                    package_manifest_path: package_manifest_path.to_path_buf(),
+                    path: path.to_path_buf(),
+                    theorem,
+                });
             }
         }
     }
@@ -531,6 +583,31 @@ mod tests {
 
         assert_eq!(scan.function_specs.len(), 1);
         assert!(scan.function_specs[0].proof.is_some());
+        scan.reject_unsupported().unwrap();
+    }
+
+    #[test]
+    fn scan_file_records_auxiliary_theorem() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("lib.rs");
+        std::fs::write(
+            &path,
+            r#"
+            #[anneal(theorem(
+                attr = "simp",
+                name = "always_true",
+                definition(ty = "True", proof = "trivial")
+            ))]
+            pub fn f(x: u32) -> u32 { x }
+            "#,
+        )
+        .unwrap();
+
+        let mut scan = AnnotationScan::default();
+        scan_file(&mut scan, &temp.path().join("Cargo.toml"), &path).unwrap();
+
+        assert_eq!(scan.aux_theorems.len(), 1);
+        assert_eq!(scan.aux_theorems[0].theorem.name, "always_true");
         scan.reject_unsupported().unwrap();
     }
 }
