@@ -57,8 +57,6 @@ REQUIRED_MEMBER_PATHS = {
     "aeneas/bin/aeneas",
     "aeneas/bin/charon",
     "aeneas/bin/charon-driver",
-    "aeneas/backends/lean/.lake/config/aeneas/lakefile.olean",
-    "aeneas/packages/mathlib/.lake/config/mathlib/lakefile.olean",
     "aeneas/packages/mathlib/lake-manifest.json",
     "lean/bin/lake",
     "lean/bin/lean",
@@ -256,6 +254,16 @@ def _is_lake_build_path(path: str) -> bool:
 
 def _is_lake_build_trace(path: str) -> bool:
     return _is_lake_build_path(path) and path.endswith(".trace")
+
+
+def _has_lake_config_lakefile(inventory: ArchiveInventory, prefix: str) -> bool:
+    for path in inventory.present_paths:
+        if not path.startswith(prefix) or not path.endswith("/lakefile.olean"):
+            continue
+        rel = path[len(prefix) :]
+        if len(rel.split("/")) == 2 and path in inventory.regular_like_paths:
+            return True
+    return False
 
 
 def _canonicalize_trace(data: bytes, path: str) -> bytes:
@@ -546,6 +554,20 @@ def _validate_layout(inventory: ArchiveInventory) -> None:
     if bad_required:
         raise ArchiveInspectionError(
             "required members are not files or links: " + ", ".join(sorted(bad_required))
+        )
+
+    required_config_prefixes = {
+        "Aeneas root Lake config": "aeneas/backends/lean/.lake/config/",
+    }
+    missing_config_kinds = [
+        name
+        for name, prefix in required_config_prefixes.items()
+        if not _has_lake_config_lakefile(inventory, prefix)
+    ]
+    if missing_config_kinds:
+        raise ArchiveInspectionError(
+            "archive is missing required Lake configs: "
+            + ", ".join(missing_config_kinds)
         )
 
     not_executable = {

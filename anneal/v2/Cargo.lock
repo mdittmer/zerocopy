@@ -336,8 +336,8 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "charon"
-version = "0.1.210"
-source = "git+https://github.com/AeneasVerif/charon.git?tag=nightly-2026.06.03#0c91ca1a8e002d6bfa8d8f1f452804fce2f92cf1"
+version = "0.1.223"
+source = "git+https://github.com/AeneasVerif/charon.git?rev=cb50ff16b9f1066b8a97dc06da704de2da2fa41c#cb50ff16b9f1066b8a97dc06da704de2da2fa41c"
 dependencies = [
  "annotate-snippets",
  "anstream 0.6.21",
@@ -933,7 +933,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 [[package]]
 name = "hax-adt-into"
 version = "0.3.5"
-source = "git+https://github.com/AeneasVerif/charon.git?tag=nightly-2026.06.03#0c91ca1a8e002d6bfa8d8f1f452804fce2f92cf1"
+source = "git+https://github.com/AeneasVerif/charon.git?rev=cb50ff16b9f1066b8a97dc06da704de2da2fa41c#cb50ff16b9f1066b8a97dc06da704de2da2fa41c"
 dependencies = [
  "itertools",
  "proc-macro2",
@@ -1170,7 +1170,7 @@ checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/AeneasVerif/charon.git?tag=nightly-2026.06.03#0c91ca1a8e002d6bfa8d8f1f452804fce2f92cf1"
+source = "git+https://github.com/AeneasVerif/charon.git?rev=cb50ff16b9f1066b8a97dc06da704de2da2fa41c#cb50ff16b9f1066b8a97dc06da704de2da2fa41c"
 dependencies = [
  "proc-macro2",
  "quote",
