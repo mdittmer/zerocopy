@@ -4,9 +4,14 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    charon.url = "github:aeneasverif/charon/527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59";
+    charon.inputs.nixpkgs.follows = "nixpkgs";
+    charon.inputs.flake-utils.follows = "flake-utils";
+    aeneas.url = "github:mdittmer/aeneas/ub";
+    aeneas.inputs.charon.follows = "charon";
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }:
+  outputs = { self, nixpkgs, flake-utils, charon, aeneas, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -93,6 +98,35 @@
           if pkgs.stdenv.isLinux
           then "${linuxFhsEnv}/bin/anneal-linux-fhs -c ${pkgs.lib.escapeShellArg command}"
           else command;
+
+        charonRustToolchain = charon.packages.${system}.rustToolchain;
+        charonUnwrappedForAnneal =
+          (charon.packages.${system}.charon-unwrapped.override {
+            miriSysroots = null;
+          }).overrideAttrs (_: {
+            doCheck = false;
+            checkPhase = "";
+          });
+        charonForAnneal = pkgs.runCommand "charon-for-anneal"
+          {
+            nativeBuildInputs = [ pkgs.makeWrapper ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.bintools ];
+          }
+          (''
+            cp -r ${charonUnwrappedForAnneal} $out
+            chmod -R u+w $out
+            wrapProgram $out/bin/charon \
+              --set CHARON_TOOLCHAIN_IS_IN_PATH 1 \
+              --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath [ charonRustToolchain ]}" \
+              --prefix PATH : "${pkgs.lib.makeBinPath [ charonRustToolchain ]}"
+          ''
+          + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+            install_name_tool -add_rpath "${charonRustToolchain}/lib" "$out/bin/charon-driver"
+          '');
+
+        aeneasForAnneal = aeneas.packages.${system}.aeneas.override {
+          charon = charonForAnneal;
+        };
 
         # Prebuilt Aeneas release archive.
         fetchAeneas = { target, releaseTag, sha256 }:
@@ -371,29 +405,37 @@
           });
       in
       {
-        packages.aeneas-download = fetchAeneas {
-          target = aeneasTarget;
-          releaseTag = "nightly-2026.07.16-bc2eb6f";
-          sha256 = aeneasSha256;
-        };
+        # Aeneas release-layout tree built from the fork branch that separates
+        # undefined behavior from ordinary failure in `Result`.
+        #
+        # Do not consume upstream's `aeneas-release` output here: it bundles
+        # Charon's full release sysroots, whose fixed-output hash can drift
+        # independently of the Aeneas/Charon binaries Anneal actually invokes.
+        # Anneal supplies its own Rust sysroot, so this archive only needs the
+        # two executables plus Aeneas' Lean backend sources.
+        packages.aeneas-download = pkgs.runCommand "aeneas-release-layout"
+          {
+            aeneasBin = aeneasForAnneal;
+          } ''
+          mkdir -p $out
+          cp -L $aeneasBin/bin/aeneas $out/aeneas
+          cp -L $aeneasBin/bin/charon $out/charon
+          cp -r ${aeneas}/backends $out/backends
+          chmod +x $out/aeneas $out/charon
+        '';
 
-        # Extracts the toolchain metadata implied by the Aeneas archive.
+        # Extracts the toolchain metadata implied by the Aeneas release tree.
         packages.aeneas-unpacked = pkgs.stdenv.mkDerivation {
           pname = "aeneas-unpacked";
           version = "1.0.0";
 
           src = self.packages.${system}.aeneas-download;
 
-          nativeBuildInputs = with pkgs; [
-            gnutar
-            gzip
-          ];
-
           dontUnpack = true;
 
           buildPhase = builtins.concatStringsSep "\n" [
             "mkdir -p $out"
-            "tar -xzf $src -C $out"
+            "cp -r $src/. $out/"
             "chmod -R +w $out"
             "LEAN_RAW=\$(cat $out/backends/lean/lean-toolchain)"
             "LEAN_VERSION=\$(echo \"\$LEAN_RAW\" | sed -E 's|leanprover/lean4:v?||' | tr -d '\\n')"
@@ -420,19 +462,13 @@
 
           src = self.packages.${system}.aeneas-download;
 
-          nativeBuildInputs = with pkgs; [
-            gnutar
-            gzip
-          ];
-
           dontUnpack = true;
 
           buildPhase = builtins.concatStringsSep "\n" [
             "mkdir -p $out"
-            "tar -xzf $src -C $out --strip-components=2 \\"
-            "  backends/lean/lakefile.lean \\"
-            "  backends/lean/lake-manifest.json \\"
-            "  backends/lean/lean-toolchain"
+            "cp $src/backends/lean/lakefile.lean $out/"
+            "cp $src/backends/lean/lake-manifest.json $out/"
+            "cp $src/backends/lean/lean-toolchain $out/"
           ];
         };
 

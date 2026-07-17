@@ -339,8 +339,8 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "charon"
-version = "0.1.223"
-source = "git+https://github.com/AeneasVerif/charon.git?rev=cb50ff16b9f1066b8a97dc06da704de2da2fa41c#cb50ff16b9f1066b8a97dc06da704de2da2fa41c"
+version = "0.1.225"
+source = "git+https://github.com/AeneasVerif/charon.git?rev=527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59#527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59"
 dependencies = [
  "annotate-snippets",
  "anstream 0.6.21",
@@ -463,7 +463,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.59.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -716,7 +716,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -936,7 +936,7 @@ checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 [[package]]
 name = "hax-adt-into"
 version = "0.3.5"
-source = "git+https://github.com/AeneasVerif/charon.git?rev=cb50ff16b9f1066b8a97dc06da704de2da2fa41c#cb50ff16b9f1066b8a97dc06da704de2da2fa41c"
+source = "git+https://github.com/AeneasVerif/charon.git?rev=527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59#527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59"
 dependencies = [
  "itertools",
  "proc-macro2",
@@ -1173,7 +1173,7 @@ checksum = "113b30b4cd05f7c06868fdb2854f66a7b9fece9a48425351cd532e810d74024f"
 [[package]]
 name = "macros"
 version = "0.1.0"
-source = "git+https://github.com/AeneasVerif/charon.git?rev=cb50ff16b9f1066b8a97dc06da704de2da2fa41c#cb50ff16b9f1066b8a97dc06da704de2da2fa41c"
+source = "git+https://github.com/AeneasVerif/charon.git?rev=527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59#527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1727,7 +1727,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2062,7 +2062,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2634,7 +2634,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -2654,15 +2654,6 @@ name = "windows-sys"
 version = "0.52.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
-dependencies = [
- "windows-targets",
-]
-
-[[package]]
-name = "windows-sys"
-version = "0.59.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
 dependencies = [
  "windows-targets",
 ]

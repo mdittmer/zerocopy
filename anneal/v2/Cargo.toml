@@ -72,4 +72,4 @@ quote = "1"
 syn = { version = "2", features = ["full", "parsing"] }
 pathdiff = "0.2"
 # Keep this revision in sync with the `charon-pin` file from the pinned Aeneas release.
-charon_lib = { package = "charon", git = "https://github.com/AeneasVerif/charon.git", rev = "cb50ff16b9f1066b8a97dc06da704de2da2fa41c", default-features = false }
+charon_lib = { package = "charon", git = "https://github.com/AeneasVerif/charon.git", rev = "527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59", default-features = false }
