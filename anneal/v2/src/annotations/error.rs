@@ -18,6 +18,8 @@ pub enum AnnotationError {
     UnsupportedFlag(String),
     #[error("unsupported Anneal value: {0}")]
     UnsupportedValue(String),
+    #[error("cfg_attr-wrapped Anneal attributes are not supported; use `#[anneal(...)]` directly")]
+    CfgAttrWrapperUnsupported,
     #[error("unknown Anneal path `{0}`")]
     UnknownPath(String),
     #[error("Anneal path `{0}` is not a leaf")]

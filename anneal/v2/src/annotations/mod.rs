@@ -341,6 +341,16 @@ mod tests {
     }
 
     #[test]
+    fn cfg_attr_anneal_wrapper_is_rejected() {
+        let err = parse_attributes(&[
+            parse_quote!(#[cfg_attr(anneal, anneal(spec(requires = "x != 42#U32")))]),
+        ])
+        .unwrap_err();
+
+        assert_eq!(err, AnnotationError::CfgAttrWrapperUnsupported);
+    }
+
+    #[test]
     fn spec_rejects_rust_language_prop_for_now() {
         let err =
             parse_attributes(&[parse_quote!(#[anneal(spec(requires = x != 42))])]).unwrap_err();

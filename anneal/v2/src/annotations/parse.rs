@@ -9,6 +9,7 @@
 
 use proc_macro2::{TokenStream, TokenTree};
 use quote::ToTokens as _;
+use syn::parse::Parser as _;
 use syn::parse::{Parse, ParseStream};
 use syn::{Meta, Path, Token, parenthesized};
 
@@ -100,6 +101,8 @@ pub(super) fn parse_matches(
     for attr in attrs {
         if is_anneal_attribute(&attr.meta)? {
             out.extend(parse_anneal_attribute(&attr.meta, target)?);
+        } else if cfg_attr_wraps_anneal(&attr.meta)? {
+            return Err(AnnotationError::CfgAttrWrapperUnsupported);
         }
     }
 
@@ -108,6 +111,26 @@ pub(super) fn parse_matches(
 
 fn is_anneal_attribute(meta: &Meta) -> Result<bool> {
     Ok(path_segments(meta.path())?.first().map(String::as_str) == Some("anneal"))
+}
+
+fn cfg_attr_wraps_anneal(meta: &Meta) -> Result<bool> {
+    if path_segments(meta.path())?.first().map(String::as_str) != Some("cfg_attr") {
+        return Ok(false);
+    }
+    let Meta::List(list) = meta else {
+        return Ok(false);
+    };
+
+    let parser = syn::punctuated::Punctuated::<Meta, Token![,]>::parse_terminated;
+    let entries = parser
+        .parse2(list.tokens.clone())
+        .map_err(|err| AnnotationError::Parse(err.to_string()))?;
+    for entry in entries.into_iter().skip(1) {
+        if is_anneal_attribute(&entry)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
 }
 
 fn parse_anneal_attribute(
