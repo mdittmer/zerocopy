@@ -8,8 +8,9 @@ usage() {
 usage: chase-aeneas-versions.sh RELEASE_TAG [--target linux-x86_64] [--work-dir DIR] [--keep]
 
 Downloads an Aeneas release archive, extracts the Lean and Rust toolchain
-versions it was built against, and computes the recursive Nix hashes used by
-flake.nix for the matching Lean and Rust toolchain directories.
+versions it was built against, fetches the matching Charon source pin from
+the Aeneas tag, and computes the recursive Nix hashes used by flake.nix for
+the matching Lean and Rust toolchain directories.
 
 The mathlib-cache-download output hash depends on Lake's CDN cache result and
 is reported as a follow-up Nix fixed-output hash to refresh after these values.
@@ -125,6 +126,20 @@ aeneas_archive="$work_dir/aeneas-$target.tar.gz"
 aeneas_url="https://github.com/AeneasVerif/aeneas/releases/download/$release_tag/aeneas-$target.tar.gz"
 download "$aeneas_url" "$aeneas_archive"
 aeneas_sha256_hex=$(sha256sum "$aeneas_archive" | awk '{print $1}')
+aeneas_sha256_sri=$(nix hash convert --hash-algo sha256 --to sri "$aeneas_sha256_hex")
+
+charon_pin_file="$work_dir/charon-pin"
+charon_pin_url="https://raw.githubusercontent.com/AeneasVerif/aeneas/$release_tag/charon-pin"
+download "$charon_pin_url" "$charon_pin_file"
+charon_rev=$(
+  grep -Ev '^[[:space:]]*(#|$)' "$charon_pin_file" |
+    head -n 1 |
+    tr -d '[:space:]'
+)
+if [[ ! "$charon_rev" =~ ^[0-9a-f]{40}$ ]]; then
+  echo "could not parse Charon pin from $charon_pin_url" >&2
+  exit 1
+fi
 
 extract_dir="$work_dir/aeneas"
 mkdir -p "$extract_dir"
@@ -233,6 +248,10 @@ cat <<EOF
 releaseTag = "$release_tag"
 aeneas_target = "$target"
 aeneas_sha256 = "$aeneas_sha256_hex"
+aeneas_sha256_sri = "$aeneas_sha256_sri"
+
+charon_rev = "$charon_rev"
+charon_lib = { package = "charon", git = "https://github.com/AeneasVerif/charon.git", rev = "$charon_rev", default-features = false }
 
 lean_toolchain = "$lean_raw"
 leanVersion = "$lean_version"
@@ -245,7 +264,8 @@ rust_sha256 = "$rust_output_hash"
 mathlib_requested_rev = "$mathlib_rev"
 
 Next hashes to refresh in flake.nix:
-- packages.aeneas-download-$target.sha256: $aeneas_sha256_hex
+- packages.aeneas-download-$target.sha256: $aeneas_sha256_sri
+- Cargo.toml charon_lib.rev: $charon_rev
 - packages.lean-toolchain.leanVersion: $lean_version
 - packages.lean-toolchain.sha256: $lean_output_hash
 - packages.rust-toolchain.rustDate: $rust_date
