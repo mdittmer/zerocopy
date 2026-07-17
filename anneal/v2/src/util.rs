@@ -12,6 +12,14 @@ use std::io::BufRead as _;
 use anyhow::Context as _;
 use fs2::FileExt as _;
 
+pub(crate) fn absolute_path(path: std::path::PathBuf) -> anyhow::Result<std::path::PathBuf> {
+    if path.is_absolute() {
+        Ok(path)
+    } else {
+        Ok(std::env::current_dir().context("failed to get current directory")?.join(path))
+    }
+}
+
 /// Represents an active, exclusive lock on a directory.
 ///
 /// This struct guarantees that the process holds an OS-level file lock

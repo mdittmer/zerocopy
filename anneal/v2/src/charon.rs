@@ -74,7 +74,7 @@ pub fn run_charon(
         cmd.arg("cargo");
         cmd.arg("--preset=aeneas");
 
-        let llbc_path = artifact.llbc_path(roots);
+        let llbc_path = crate::util::absolute_path(artifact.llbc_path(roots))?;
         cmd.arg("--dest-file").arg(llbc_path);
 
         // Fail fast on errors: if Charon (or `rustc`) encounters a compilation error or

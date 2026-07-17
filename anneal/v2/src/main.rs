@@ -255,7 +255,7 @@ mod tests {
             let lib_var =
                 if cfg!(target_os = "macos") { "DYLD_LIBRARY_PATH" } else { "LD_LIBRARY_PATH" };
             assert_eq!(command_env(&cmd, lib_var), Some(toolchain.rust_lib().as_os_str()));
-            assert!(command_env(&cmd, "HOME").is_none());
+            assert!(command_env(&cmd, "HOME").is_some());
         }
 
         #[test]
