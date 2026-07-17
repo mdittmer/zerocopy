@@ -11,6 +11,8 @@ online_tests = []
 name = "cargo-anneal"
 edition = "2024"
 version = "0.1.0-alpha.22"
+# The examples directory is a separate Cargo package used as Anneal input.
+autoexamples = false
 description = "Formally verify that your safety comments are correct."
 categories = [
   "development-tools::cargo-plugins",

@@ -37,6 +37,8 @@ pub fn run_charon(
 ) -> anyhow::Result<()> {
     let llbc_root = roots.llbc_root();
     std::fs::create_dir_all(&llbc_root).context("Failed to create LLBC output directory")?;
+    let source_view = crate::source_view::SourceView::prepare(roots, packages)
+        .context("Failed to prepare Charon Rust source view")?;
 
     // Global print mutex to prevent interleaved printing of consolidated artifact buffers.
     let print_mutex = std::sync::Arc::new(std::sync::Mutex::new(()));
@@ -86,7 +88,7 @@ pub fn run_charon(
         // Ensure cargo emits json msgs which charon-driver natively generates.
         cmd.arg("--message-format=json");
 
-        cmd.arg("--manifest-path").arg(&artifact.manifest_path);
+        cmd.arg("--manifest-path").arg(source_view.manifest_path(artifact).as_ref());
 
         use crate::resolve::AnnealTargetKind::*;
         match artifact.target_kind {

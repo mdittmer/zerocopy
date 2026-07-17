@@ -20,6 +20,8 @@ pub struct AnnealArtifact {
     pub target_kind: crate::resolve::AnnealTargetKind,
     /// The path to the crate's `Cargo.toml`.
     pub manifest_path: std::path::PathBuf,
+    /// The Rust source file for this target, when available.
+    pub src_path: Option<std::path::PathBuf>,
 }
 
 impl From<&crate::resolve::AnnealTarget> for AnnealArtifact {
@@ -28,6 +30,7 @@ impl From<&crate::resolve::AnnealTarget> for AnnealArtifact {
             name: target.name.clone(),
             target_kind: target.kind,
             manifest_path: target.manifest_path.clone(),
+            src_path: Some(target.src_path.clone()),
         }
     }
 }
@@ -42,6 +45,18 @@ impl From<&cargo_metadata::Package> for AnnealArtifact {
             },
             target_kind: crate::resolve::AnnealTargetKind::Lib,
             manifest_path: package.manifest_path.as_std_path().to_owned(),
+            src_path: package
+                .targets
+                .iter()
+                .find(|target| {
+                    target.kind.iter().any(|kind| {
+                        matches!(
+                            kind,
+                            cargo_metadata::TargetKind::Lib | cargo_metadata::TargetKind::RLib
+                        )
+                    })
+                })
+                .map(|target| target.src_path.as_std_path().to_owned()),
         }
     }
 }

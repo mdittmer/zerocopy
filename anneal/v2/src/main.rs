@@ -19,6 +19,7 @@ mod resolve;
 mod scanner;
 mod setup;
 mod soundness;
+mod source_view;
 mod util;
 
 /// Anneal

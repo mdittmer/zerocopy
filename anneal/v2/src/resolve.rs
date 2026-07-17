@@ -68,7 +68,7 @@ pub struct Args {
     #[arg(long)]
     pub tests: bool,
 
-    /// Allow `sorry` in proofs and inject `sorry` for missing proofs.
+    /// Compatibility flag; omitted generated function-spec proofs use `step*`.
     #[arg(long)]
     pub allow_sorry: bool,
 
@@ -170,6 +170,9 @@ pub struct AnnealTarget {
 
     /// Path to the `Cargo.toml` for this target.
     pub manifest_path: std::path::PathBuf,
+
+    /// Path to the Rust source file that defines this Cargo target.
+    pub src_path: std::path::PathBuf,
 }
 
 #[derive(Debug)]
@@ -231,6 +234,14 @@ impl<'a> LockedRoots<'a> {
     // by downstream tools like Charon to coordinate dependency artifacts.
     pub fn cargo_target_dir(&self) -> std::path::PathBuf {
         self.roots.cargo_target_dir()
+    }
+
+    pub fn source_root(&self) -> std::path::PathBuf {
+        self.anneal_run_root.path.join("rust_source")
+    }
+
+    pub fn workspace_root(&self) -> &std::path::Path {
+        self.roots.metadata.workspace_root.as_std_path()
     }
 }
 
@@ -302,6 +313,7 @@ pub fn resolve_roots(args: &Args, toolchain: &crate::setup::Toolchain) -> anyhow
             // if the CWD changes or if we're working with complex workspace
             // structures.
             manifest_path: package.manifest_path.as_std_path().to_owned(),
+            src_path: target.src_path.as_std_path().to_owned(),
         }));
     }
 

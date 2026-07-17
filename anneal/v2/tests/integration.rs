@@ -145,3 +145,275 @@ fn test_generate_subcommand_simple() {
     assert!(lean_output_dir.join("lake-manifest.json").is_file());
     assert!(lean_output_dir.join("lean-toolchain").is_file());
 }
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_checks_call_site_preconditions() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let good_project = temp_dir.path().join("good_project");
+    let bad_project = temp_dir.path().join("bad_project");
+    write_call_site_project(
+        &good_project,
+        r#"
+            #[anneal(spec(requires = "flag = true"))]
+            pub fn needs_true(flag: bool) -> bool { flag }
+
+            pub fn forwards(flag: bool) -> bool {
+                if flag {
+                    needs_true(flag)
+                } else {
+                    false
+                }
+            }
+        "#,
+    );
+    write_call_site_project(
+        &bad_project,
+        r#"
+            #[anneal(spec(requires = "flag = true"))]
+            pub fn needs_true(flag: bool) -> bool { flag }
+
+            pub fn forwards(flag: bool) -> bool { needs_true(flag) }
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    let good_lean = temp_dir.path().join("good_lean");
+    let good_output =
+        generate_project(&bin_path, &good_project, &temp_dir.path().join("good_llbc"), &good_lean);
+    assert!(
+        good_output.status.success(),
+        "good call-site project failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&good_output.stdout),
+        String::from_utf8_lossy(&good_output.stderr)
+    );
+
+    let bad_lean = temp_dir.path().join("bad_lean");
+    let bad_output =
+        generate_project(&bin_path, &bad_project, &temp_dir.path().join("bad_llbc"), &bad_lean);
+    assert!(
+        !bad_output.status.success(),
+        "bad call-site project unexpectedly passed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&bad_output.stdout),
+        String::from_utf8_lossy(&bad_output.stderr)
+    );
+    let soundness = generated_soundness(&bad_lean);
+    assert!(soundness.contains("theorem anneal_soundness_0_needs_true (flag : Bool) :"));
+    assert!(soundness.contains("(flag = true) →"));
+    assert!(soundness.contains(
+        "theorem anneal_soundness_1_forwards (flag : Bool) :\n  forwards flag ⦃ result => True ⦄"
+    ));
+    assert!(!soundness.contains("anneal_callsite"));
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_expands_trait_method_specs_to_impls() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project = temp_dir.path().join("trait_project");
+    write_call_site_project(
+        &project,
+        r#"
+            pub trait Bounded {
+                #[anneal(spec(requires = "x.val <= 10"))]
+                fn bounded(x: u32) -> u32;
+            }
+
+            pub struct Impl;
+
+            impl Bounded for Impl {
+                fn bounded(x: u32) -> u32 { x }
+            }
+
+            #[anneal(spec(requires = "x.val <= 10"))]
+            pub fn call_impl(x: u32) -> u32 { Impl::bounded(x) }
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    let lean = temp_dir.path().join("trait_lean");
+    let output = generate_project(&bin_path, &project, &temp_dir.path().join("trait_llbc"), &lean);
+    assert!(
+        output.status.success(),
+        "trait method project failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let soundness = generated_soundness(&lean);
+    assert!(soundness.contains("Impl_Insts_Call_site_demoBounded_bounded"));
+    assert!(soundness.contains("call_impl x ⦃ result => True ⦄"));
+    assert!(!soundness.contains("anneal_callsite"));
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_checks_struct_invariants() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project = temp_dir.path().join("struct_project");
+    write_call_site_project(
+        &project,
+        r#"
+            #[anneal(spec(invariant = "self.value.val <= 10"))]
+            pub struct Counter {
+                value: u32,
+            }
+
+            #[anneal(spec(requires = "value.val <= 10"))]
+            pub fn make(value: u32) -> Counter {
+                Counter { value }
+            }
+
+            pub fn read(counter: Counter) -> u32 {
+                counter.value
+            }
+
+            pub fn touch(_counter: &mut Counter) {}
+
+            pub fn call_read(counter: Counter) -> u32 {
+                read(counter)
+            }
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    let lean = temp_dir.path().join("struct_lean");
+    let output = generate_project(&bin_path, &project, &temp_dir.path().join("struct_llbc"), &lean);
+    assert!(
+        output.status.success(),
+        "struct invariant project failed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let soundness = generated_soundness(&lean);
+    assert!(soundness.contains("theorem anneal_soundness_0_make"));
+    assert!(soundness.contains("make value ⦃ result => (result.value.val <= 10) ⦄"));
+    assert!(soundness.contains("theorem anneal_soundness_2_touch"));
+    assert!(soundness.contains("call_read counter ⦃ result => True ⦄"));
+    assert!(!soundness.contains("anneal_callsite"));
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_v2_examples_with_example_flag_in_dev_mode() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let examples_manifest =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples").join("Cargo.toml");
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    for example in
+        ["simple", "postcondition", "function_invariant", "trait_precondition", "struct_invariant"]
+    {
+        let output_dir = temp_dir.path().join(example).join("llbc");
+        let lean_output_dir = temp_dir.path().join(example).join("lean");
+        let output =
+            generate_example(&bin_path, &examples_manifest, example, &output_dir, &lean_output_dir);
+        assert!(
+            output.status.success(),
+            "{example} example failed\nstdout: {}\nstderr: {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(generated_soundness(&lean_output_dir).contains("theorem anneal_soundness_"));
+
+        if example == "simple" {
+            let rerun = generate_example(
+                &bin_path,
+                &examples_manifest,
+                example,
+                &output_dir,
+                &lean_output_dir,
+            );
+            assert!(
+                rerun.status.success(),
+                "{example} example rerun failed\nstdout: {}\nstderr: {}",
+                String::from_utf8_lossy(&rerun.stdout),
+                String::from_utf8_lossy(&rerun.stderr)
+            );
+        }
+    }
+}
+
+#[cfg(feature = "exocrate_tests")]
+fn write_call_site_project(project_dir: &std::path::Path, lib_rs: &str) {
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    std::fs::write(
+        project_dir.join("Cargo.toml"),
+        r#"
+            [package]
+            name = "call_site_demo"
+            version = "0.1.0"
+            edition = "2021"
+
+            [lib]
+            path = "src/lib.rs"
+        "#,
+    )
+    .unwrap();
+    std::fs::write(project_dir.join("src/lib.rs"), lib_rs).unwrap();
+}
+
+#[cfg(feature = "exocrate_tests")]
+fn generate_project(
+    bin_path: &std::path::Path,
+    project_dir: &std::path::Path,
+    output_dir: &std::path::Path,
+    lean_output_dir: &std::path::Path,
+) -> std::process::Output {
+    let mut cmd = cargo_anneal_command(bin_path);
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.arg("generate")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .arg("--lib")
+        .arg("--output-dir")
+        .arg(output_dir)
+        .arg("--lean-output-dir")
+        .arg(lean_output_dir)
+        .arg("--no-progress");
+    cmd.output().expect("failed to execute cargo-anneal")
+}
+
+#[cfg(feature = "exocrate_tests")]
+fn generate_example(
+    bin_path: &std::path::Path,
+    examples_manifest: &std::path::Path,
+    example: &str,
+    output_dir: &std::path::Path,
+    lean_output_dir: &std::path::Path,
+) -> std::process::Output {
+    let mut cmd = cargo_anneal_command(bin_path);
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.arg("generate")
+        .arg("--manifest-path")
+        .arg(examples_manifest)
+        .arg("--example")
+        .arg(example)
+        .arg("--output-dir")
+        .arg(output_dir)
+        .arg("--lean-output-dir")
+        .arg(lean_output_dir)
+        .arg("--no-progress");
+    cmd.output().expect("failed to execute cargo-anneal")
+}
+
+#[cfg(feature = "exocrate_tests")]
+fn generated_soundness(lean_output_dir: &std::path::Path) -> String {
+    for entry in std::fs::read_dir(lean_output_dir).unwrap() {
+        let path = entry.unwrap().path().join("Soundness.lean");
+        if path.is_file() {
+            return std::fs::read_to_string(path).unwrap();
+        }
+    }
+    panic!("No generated Soundness.lean found in {:?}", lean_output_dir);
+}
