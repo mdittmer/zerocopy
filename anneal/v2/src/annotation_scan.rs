@@ -210,10 +210,28 @@ pub fn scan_packages(
                 package.manifest_path.display()
             )
         })?;
-        scan_package_root(&mut scan, &package.manifest_path, package_root)?;
+        if let Some(src_path) = package_target_source(package) {
+            scan_file(&mut scan, &package.manifest_path, package_root, src_path)?;
+        } else {
+            scan_package_root(&mut scan, &package.manifest_path, package_root)?;
+        }
     }
     scan.expand_trait_function_specs();
     Ok(scan)
+}
+
+fn package_target_source(package: &crate::scanner::AnnealArtifact) -> Option<&std::path::Path> {
+    match package.target_kind {
+        crate::resolve::AnnealTargetKind::Bin
+        | crate::resolve::AnnealTargetKind::Example
+        | crate::resolve::AnnealTargetKind::Test => package.src_path.as_deref(),
+        crate::resolve::AnnealTargetKind::Lib
+        | crate::resolve::AnnealTargetKind::RLib
+        | crate::resolve::AnnealTargetKind::ProcMacro
+        | crate::resolve::AnnealTargetKind::CDyLib
+        | crate::resolve::AnnealTargetKind::DyLib
+        | crate::resolve::AnnealTargetKind::StaticLib => None,
+    }
 }
 
 fn scan_package_root(
@@ -821,6 +839,53 @@ mod tests {
 
         assert_eq!(scan.function_specs.len(), 1);
         assert_eq!(scan.function_specs[0].spec.requires.len(), 1);
+        scan.reject_unsupported().unwrap();
+    }
+
+    #[test]
+    fn scan_packages_scans_selected_example_source_only() {
+        let temp = tempfile::tempdir().unwrap();
+        let manifest_path = temp.path().join("Cargo.toml");
+        let examples = temp.path().join("examples");
+        std::fs::create_dir_all(&examples).unwrap();
+        std::fs::write(&manifest_path, "").unwrap();
+        let selected = examples.join("selected.rs");
+        std::fs::write(
+            &selected,
+            r#"
+            #[anneal(spec(requires = "flag = true"))]
+            pub fn selected(flag: bool) -> bool { flag }
+
+            fn main() { let _ = selected(true); }
+            "#,
+        )
+        .unwrap();
+        std::fs::write(
+            examples.join("sibling.rs"),
+            r#"
+            #[anneal(spec(invariant = "self.value.val <= 10"))]
+            pub struct Counter {
+                value: u32,
+            }
+            "#,
+        )
+        .unwrap();
+
+        let artifact = crate::scanner::AnnealArtifact {
+            name: crate::resolve::AnnealTargetName {
+                package_name: serde_json::from_str("\"scan-demo\"").unwrap(),
+                target_name: "selected".into(),
+                kind: crate::resolve::AnnealTargetKind::Example,
+            },
+            target_kind: crate::resolve::AnnealTargetKind::Example,
+            manifest_path,
+            src_path: Some(selected),
+        };
+        let scan = scan_packages(&[artifact]).unwrap();
+
+        assert_eq!(scan.function_specs.len(), 1);
+        assert_eq!(scan.function_specs[0].rust_name, "selected");
+        assert!(scan.struct_invariants.is_empty());
         scan.reject_unsupported().unwrap();
     }
 
