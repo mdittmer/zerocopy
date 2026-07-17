@@ -121,13 +121,17 @@ impl Toolchain {
         let mut cmd = std::process::Command::new(tool.path(self));
         cmd.env_clear();
         match tool {
-            Tool::Aeneas | Tool::Cargo | Tool::Rustc => {}
+            Tool::Aeneas | Tool::Rustc => {}
+            Tool::Cargo => {
+                cmd.env("HOME", command_home()?);
+            }
             Tool::Charon => {
                 // The archive supplies Rust tools, but not host build tools
                 // such as the linker. Keep the caller's `PATH` after our Rust
                 // bin directory so Cargo builds use the managed Rust toolchain
                 // while still finding those host tools.
                 cmd.env("CHARON_TOOLCHAIN_IS_IN_PATH", "1")
+                    .env("HOME", command_home()?)
                     .env("PATH", prepend_current_path(self.rust_bin())?)
                     .env(rust_library_path_env_var(), self.rust_lib());
             }
@@ -147,6 +151,15 @@ impl Toolchain {
         }
         Ok(cmd)
     }
+}
+
+fn command_home() -> anyhow::Result<std::ffi::OsString> {
+    if let Some(home) = std::env::var_os("HOME") {
+        return Ok(home);
+    }
+    let home = std::env::temp_dir().join("cargo-anneal-home");
+    std::fs::create_dir_all(&home).context("failed to create fallback HOME for tool command")?;
+    Ok(home.into_os_string())
 }
 
 fn prepend_current_path(path: std::path::PathBuf) -> anyhow::Result<std::ffi::OsString> {

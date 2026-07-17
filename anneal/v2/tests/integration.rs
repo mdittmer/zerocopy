@@ -18,9 +18,15 @@ fn cargo_anneal_bin_path() -> std::path::PathBuf {
 #[cfg(feature = "exocrate_tests")]
 fn cargo_anneal_command(bin_path: &std::path::Path) -> std::process::Command {
     let mut cmd = std::process::Command::new(bin_path);
+    let home = std::env::var_os("HOME").unwrap_or_else(|| {
+        let home = std::env::temp_dir().join("cargo-anneal-test-home");
+        std::fs::create_dir_all(&home).expect("failed to create test HOME");
+        home.into_os_string()
+    });
     cmd.env_clear()
         .env("__ANNEAL_LOCAL_DEV", "1")
-        .env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"));
+        .env("CARGO_MANIFEST_DIR", env!("CARGO_MANIFEST_DIR"))
+        .env("HOME", home);
     cmd
 }
 
@@ -78,8 +84,8 @@ fn test_generate_subcommand_simple() {
     std::fs::write(
         project_dir.join("src").join("lib.rs"),
         r#"
-            pub fn add(left: usize, right: usize) -> usize {
-                left + right
+            pub fn identity(value: usize) -> usize {
+                value
             }
         "#,
     )
@@ -200,10 +206,11 @@ fn test_generate_checks_call_site_preconditions() {
         String::from_utf8_lossy(&bad_output.stderr)
     );
     let soundness = generated_soundness(&bad_lean);
-    assert!(soundness.contains("theorem anneal_soundness_0_needs_true (flag : Bool) :"));
-    assert!(soundness.contains("(flag = true) →"));
     assert!(soundness.contains(
-        "theorem anneal_soundness_1_forwards (flag : Bool) :\n  forwards flag ⦃ result => True ⦄"
+        "theorem needs_true_soundness\n    (flag : Bool)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : flag = true) :\n  needs_true flag ⦃ result => True ⦄"
+    ));
+    assert!(soundness.contains(
+        "theorem forwards_soundness\n    (flag : Bool) :\n  forwards flag ⦃ result => True ⦄"
     ));
     assert!(!soundness.contains("anneal_callsite"));
 }
@@ -244,7 +251,7 @@ fn test_generate_expands_trait_method_specs_to_impls() {
         String::from_utf8_lossy(&output.stderr)
     );
     let soundness = generated_soundness(&lean);
-    assert!(soundness.contains("Impl_Insts_Call_site_demoBounded_bounded"));
+    assert!(soundness.contains("Impl_Insts_Call_site_demoBounded_bounded_soundness"));
     assert!(soundness.contains("call_impl x ⦃ result => True ⦄"));
     assert!(!soundness.contains("anneal_callsite"));
 }
@@ -291,9 +298,9 @@ fn test_generate_checks_struct_invariants() {
         String::from_utf8_lossy(&output.stderr)
     );
     let soundness = generated_soundness(&lean);
-    assert!(soundness.contains("theorem anneal_soundness_0_make"));
+    assert!(soundness.contains("theorem make_soundness"));
     assert!(soundness.contains("make value ⦃ result => (result.value.val <= 10) ⦄"));
-    assert!(soundness.contains("theorem anneal_soundness_2_touch"));
+    assert!(soundness.contains("theorem touch_soundness"));
     assert!(soundness.contains("call_read counter ⦃ result => True ⦄"));
     assert!(!soundness.contains("anneal_callsite"));
 }
@@ -320,7 +327,7 @@ fn test_generate_v2_examples_with_example_flag_in_dev_mode() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(generated_soundness(&lean_output_dir).contains("theorem anneal_soundness_"));
+        assert!(generated_soundness(&lean_output_dir).contains("_soundness"));
 
         if example == "simple" {
             let rerun = generate_example(

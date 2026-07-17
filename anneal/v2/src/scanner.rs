@@ -121,7 +121,7 @@ impl AnnealArtifact {
         format!("{}.llbc", self.artifact_slug())
     }
 
-    /// Returns the absolute path to the .llbc file.
+    /// Returns the configured path to the .llbc file.
     ///
     /// This method requires [`crate::resolve::LockedRoots`] to ensure that the caller holds the
     /// build lock before accessing the build artifact path.
