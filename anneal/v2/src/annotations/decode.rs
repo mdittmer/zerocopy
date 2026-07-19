@@ -58,6 +58,9 @@ fn apply_match(builder: &mut AttributeBuilder, matched: MatchedEntry<'_>) -> Res
             apply_value(builder, &matched.path, matched.node.value.map(|v| v.kind), tokens)
         }
         MatchedPayload::List(children) => {
+            if matches!(matched.path.as_slice(), ["spec"]) {
+                return apply_spec_list(builder, children);
+            }
             if is_spec_prop_path(&matched.path) {
                 return push_spec_prop(
                     builder,
@@ -72,6 +75,131 @@ fn apply_match(builder: &mut AttributeBuilder, matched: MatchedEntry<'_>) -> Res
             Ok(())
         }
     }
+}
+
+#[derive(Default)]
+struct PropParts {
+    attrs: Option<LeanAttrs>,
+    name: Option<String>,
+    prop: Option<Prop>,
+}
+
+impl PropParts {
+    fn is_empty(&self) -> bool {
+        self.attrs.is_none() && self.name.is_none() && self.prop.is_none()
+    }
+}
+
+fn apply_spec_list(builder: &mut AttributeBuilder, children: Vec<MatchedEntry<'_>>) -> Result<()> {
+    let mut pending: std::collections::BTreeMap<&'static str, PropParts> =
+        std::collections::BTreeMap::new();
+
+    for child in children {
+        if is_spec_prop_child_path(&child.path) {
+            apply_spec_prop_child(builder, child, &mut pending)?;
+        } else if is_spec_prop_path(&child.path)
+            && matches!(&child.payload, MatchedPayload::Value(_))
+        {
+            apply_spec_prop_value(builder, child, &mut pending)?;
+        } else {
+            flush_pending_props(builder, &mut pending)?;
+            apply_match(builder, child)?;
+        }
+    }
+
+    flush_pending_props(builder, &mut pending)
+}
+
+fn apply_spec_prop_child(
+    builder: &mut AttributeBuilder,
+    child: MatchedEntry<'_>,
+    pending: &mut std::collections::BTreeMap<&'static str, PropParts>,
+) -> Result<()> {
+    let [_, field, leaf] = child.path.as_slice() else {
+        return Err(AnnotationError::UnknownPath(path_string(&child.path)));
+    };
+    if matches!(leaf, &"prop") && pending.get(*field).is_some_and(|parts| parts.prop.is_some()) {
+        flush_pending_prop(builder, pending, *field)?;
+    }
+
+    let parts = pending.entry(*field).or_default();
+    match (*leaf, child.node.value.map(|v| v.kind), child.payload) {
+        ("name", Some(ValueKind::String), MatchedPayload::Value(tokens)) => {
+            set_once(&mut parts.name, string_value(tokens)?, &child.path)
+        }
+        (
+            "attr" | "attrs",
+            Some(kind @ (ValueKind::LeanAttr | ValueKind::LeanAttrs)),
+            MatchedPayload::Value(tokens),
+        ) => merge_lean_attrs(&mut parts.attrs, lean_attrs_fragment(kind, tokens)?, &child.path),
+        ("prop", Some(ValueKind::Prop), MatchedPayload::Value(tokens)) => {
+            set_once(&mut parts.prop, prop_scalar_value(tokens)?, &child.path)
+        }
+        (_, _, MatchedPayload::Flag) => {
+            Err(AnnotationError::UnsupportedFlag(path_string(&child.path)))
+        }
+        (_, _, MatchedPayload::List(_)) => {
+            Err(AnnotationError::NonLeafPath(path_string(&child.path)))
+        }
+        _ => Err(AnnotationError::UnknownPath(path_string(&child.path))),
+    }
+}
+
+fn apply_spec_prop_value(
+    builder: &mut AttributeBuilder,
+    child: MatchedEntry<'_>,
+    pending: &mut std::collections::BTreeMap<&'static str, PropParts>,
+) -> Result<()> {
+    let [_, field] = child.path.as_slice() else {
+        return Err(AnnotationError::UnknownPath(path_string(&child.path)));
+    };
+    if !pending.get(*field).is_some_and(|parts| !parts.is_empty()) {
+        return apply_match(builder, child);
+    }
+    if pending.get(*field).is_some_and(|parts| parts.prop.is_some()) {
+        flush_pending_prop(builder, pending, *field)?;
+    }
+
+    let MatchedPayload::Value(tokens) = child.payload else {
+        return Err(AnnotationError::UnknownPath(path_string(&child.path)));
+    };
+    let parts = pending.entry(*field).or_default();
+    set_once(&mut parts.prop, prop_scalar_value(tokens)?, &child.path)?;
+    flush_pending_prop(builder, pending, *field)
+}
+
+fn flush_pending_props(
+    builder: &mut AttributeBuilder,
+    pending: &mut std::collections::BTreeMap<&'static str, PropParts>,
+) -> Result<()> {
+    let fields = pending.keys().copied().collect::<Vec<_>>();
+    for field in fields {
+        flush_pending_prop(builder, pending, field)?;
+    }
+    Ok(())
+}
+
+fn flush_pending_prop(
+    builder: &mut AttributeBuilder,
+    pending: &mut std::collections::BTreeMap<&'static str, PropParts>,
+    field: &'static str,
+) -> Result<()> {
+    let Some(parts) = pending.remove(field) else {
+        return Ok(());
+    };
+    if parts.is_empty() {
+        return Ok(());
+    }
+
+    let prop_path = format!("spec::{field}::prop");
+    let Prop::Lean(mut lean) = required(parts.prop, &prop_path)?;
+    if let Some(name) = parts.name {
+        lean.name = Some(name);
+    }
+    if let Some(attrs) = parts.attrs {
+        lean.attrs = attrs;
+    }
+    push_spec_prop(builder, &["spec", field], Prop::Lean(lean))
 }
 
 struct Domains {
@@ -322,6 +450,16 @@ fn is_spec_prop_path(path: &[&'static str]) -> bool {
     )
 }
 
+fn is_spec_prop_child_path(path: &[&'static str]) -> bool {
+    matches!(
+        path,
+        [spec, field, leaf]
+            if *spec == "spec"
+                && matches!(*field, "requires" | "ensures" | "invariant")
+                && matches!(*leaf, "name" | "attr" | "attrs" | "prop")
+    )
+}
+
 fn push_spec_prop(builder: &mut AttributeBuilder, path: &[&'static str], prop: Prop) -> Result<()> {
     let [spec, field] = path else {
         return Err(AnnotationError::UnknownPath(path_string(path)));
@@ -341,10 +479,14 @@ fn push_spec_prop(builder: &mut AttributeBuilder, path: &[&'static str], prop: P
 
 fn prop_from_children(path: &[&'static str], children: Vec<MatchedEntry<'_>>) -> Result<Prop> {
     let mut attrs = None;
+    let mut name = None;
     let mut prop = None;
 
     for child in children {
         match (child.path.as_slice(), child.node.value.map(|v| v.kind), child.payload) {
+            ([.., "name"], Some(ValueKind::String), MatchedPayload::Value(tokens)) => {
+                set_once(&mut name, string_value(tokens)?, &child.path)?;
+            }
             (
                 _,
                 Some(kind @ (ValueKind::LeanAttr | ValueKind::LeanAttrs)),
@@ -367,6 +509,9 @@ fn prop_from_children(path: &[&'static str], children: Vec<MatchedEntry<'_>>) ->
 
     let prop_path = format!("{}::prop", path_string(path));
     let Prop::Lean(mut lean) = required(prop, &prop_path)?;
+    if let Some(name) = name {
+        lean.name = Some(name);
+    }
     if let Some(attrs) = attrs {
         lean.attrs = attrs;
     }

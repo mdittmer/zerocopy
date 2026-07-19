@@ -100,13 +100,17 @@ impl From<&str> for Prop {
 /// A Lean proposition and optional Lean attributes attached to it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct LeanProp {
+    /// Optional stable name used when generating a Lean definition for this condition.
+    pub name: Option<String>,
+    /// Lean attributes attached to the generated declaration for this condition.
     pub attrs: LeanAttrs,
+    /// Lean source for the proposition.
     pub prop: String,
 }
 
 impl From<String> for LeanProp {
     fn from(value: String) -> Self {
-        Self { attrs: Default::default(), prop: value }
+        Self { name: None, attrs: Default::default(), prop: value }
     }
 }
 
@@ -306,7 +310,23 @@ mod tests {
     }
 
     fn lean_prop_with_attrs(attrs: &[&str], prop: &str) -> Prop {
-        Prop::Lean(LeanProp { attrs: lean_attrs(attrs), prop: prop.into() })
+        Prop::Lean(LeanProp { name: None, attrs: lean_attrs(attrs), prop: prop.into() })
+    }
+
+    fn lean_prop_with_name(name: &str, prop: &str) -> Prop {
+        Prop::Lean(LeanProp {
+            name: Some(name.into()),
+            attrs: LeanAttrs::default(),
+            prop: prop.into(),
+        })
+    }
+
+    fn lean_prop_with_name_and_attrs(name: &str, attrs: &[&str], prop: &str) -> Prop {
+        Prop::Lean(LeanProp {
+            name: Some(name.into()),
+            attrs: lean_attrs(attrs),
+            prop: prop.into(),
+        })
     }
 
     fn lean_attrs(attrs: &[&str]) -> LeanAttrs {
@@ -411,6 +431,7 @@ mod tests {
         assert_eq!(
             spec.ensures,
             vec![Prop::Lean(LeanProp {
+                name: None,
                 attrs: LeanAttrs::AttrsString("simp".into()),
                 prop: "True".into(),
             })]
@@ -435,6 +456,7 @@ mod tests {
         assert_eq!(
             spec.ensures,
             vec![Prop::Lean(LeanProp {
+                name: None,
                 attrs: LeanAttrs::Attrs(vec![
                     LeanAttr::AttrString("simp".into()),
                     LeanAttr::AttrString("grind".into()),
@@ -619,6 +641,60 @@ mod tests {
             panic!("expected spec");
         };
         assert_eq!(spec.requires, vec![lean_prop_with_attrs(&["step", "grind"], "x > 42#U32")]);
+    }
+
+    #[test]
+    fn spec_structured_prop_accepts_name() {
+        let attrs = parse_one(parse_quote!(
+            #[anneal(spec(
+                requires(
+                    name = "positive",
+                    prop = "x.val > 0"
+                )
+            ))]
+        ));
+
+        let AttributeData::Spec(spec) = &attrs[0].data else {
+            panic!("expected spec");
+        };
+        assert_eq!(spec.requires, vec![lean_prop_with_name("positive", "x.val > 0")]);
+    }
+
+    #[test]
+    fn spec_path_composed_prop_accepts_name_and_prop() {
+        let attrs = parse_one(parse_quote!(
+            #[anneal(spec(
+                requires::name = "positive",
+                requires::prop = "x.val > 0",
+                ensures::name = "same_value",
+                ensures = "result.val = x.val",
+                invariant::name = "bounded",
+                invariant::attr = "simp",
+                invariant::prop = "x.val <= 10"
+            ))]
+        ));
+
+        let AttributeData::Spec(spec) = &attrs[0].data else {
+            panic!("expected spec");
+        };
+        assert_eq!(spec.requires, vec![lean_prop_with_name("positive", "x.val > 0")]);
+        assert_eq!(spec.ensures, vec![lean_prop_with_name("same_value", "result.val = x.val")]);
+        assert_eq!(
+            spec.invariants,
+            vec![lean_prop_with_name_and_attrs("bounded", &["simp"], "x.val <= 10")]
+        );
+    }
+
+    #[test]
+    fn spec_path_composed_name_requires_prop() {
+        let err = parse_attributes(&[parse_quote!(
+            #[anneal(spec(
+                requires::name = "positive"
+            ))]
+        )])
+        .unwrap_err();
+
+        assert_eq!(err, AnnotationError::MissingRequired("spec::requires::prop".into()));
     }
 
     #[test]
