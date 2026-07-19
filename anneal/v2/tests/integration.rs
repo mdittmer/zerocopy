@@ -161,7 +161,7 @@ fn test_generate_checks_call_site_preconditions() {
     write_call_site_project(
         &good_project,
         r#"
-            #[anneal(spec(requires = "flag = true"))]
+            #[anneal(spec(requires(name = "flag_true", prop = "flag = true")))]
             pub fn needs_true(flag: bool) -> bool { flag }
 
             pub fn forwards(flag: bool) -> bool {
@@ -176,7 +176,7 @@ fn test_generate_checks_call_site_preconditions() {
     write_call_site_project(
         &bad_project,
         r#"
-            #[anneal(spec(requires = "flag = true"))]
+            #[anneal(spec(requires::name = "flag_true", requires::prop = "flag = true"))]
             pub fn needs_true(flag: bool) -> bool { flag }
 
             pub fn forwards(flag: bool) -> bool { needs_true(flag) }
@@ -206,8 +206,11 @@ fn test_generate_checks_call_site_preconditions() {
         String::from_utf8_lossy(&bad_output.stderr)
     );
     let soundness = generated_soundness(&bad_lean);
+    assert!(
+        soundness.contains("def needs_true_pre_flag_true (flag : Bool) : Prop :=\n  flag = true")
+    );
     assert!(soundness.contains(
-        "theorem needs_true_soundness\n    (flag : Bool)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : flag = true) :\n  needs_true flag ⦃ result => True ⦄"
+        "theorem needs_true_soundness\n    (flag : Bool)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre_flag_true' : needs_true_pre_flag_true flag) :\n  needs_true flag ⦃ result => True ⦄"
     ));
     assert!(soundness.contains(
         "theorem forwards_soundness\n    (flag : Bool) :\n  forwards flag ⦃ result => True ⦄"
@@ -224,7 +227,7 @@ fn test_generate_expands_trait_method_specs_to_impls() {
         &project,
         r#"
             pub trait Bounded {
-                #[anneal(spec(requires = "x.val <= 10"))]
+                #[anneal(spec(requires(name = "bounded_arg", prop = "x.val <= 10")))]
                 fn bounded(x: u32) -> u32;
             }
 
@@ -234,7 +237,7 @@ fn test_generate_expands_trait_method_specs_to_impls() {
                 fn bounded(x: u32) -> u32 { x }
             }
 
-            #[anneal(spec(requires = "x.val <= 10"))]
+            #[anneal(spec(requires::name = "bounded_arg", requires::prop = "x.val <= 10"))]
             pub fn call_impl(x: u32) -> u32 { Impl::bounded(x) }
         "#,
     );
@@ -252,6 +255,12 @@ fn test_generate_expands_trait_method_specs_to_impls() {
     );
     let soundness = generated_soundness(&lean);
     assert!(soundness.contains("Impl_Insts_Call_site_demoBounded_bounded_soundness"));
+    assert!(soundness.contains(
+        "def Impl_Insts_Call_site_demoBounded_bounded_pre_bounded_arg (x : Std.U32) : Prop :=\n  x.val <= 10"
+    ));
+    assert!(soundness.contains(
+        "(required_pre_bounded_arg' : Impl_Insts_Call_site_demoBounded_bounded_pre_bounded_arg x)"
+    ));
     assert!(soundness.contains("call_impl x ⦃ result => True ⦄"));
     assert!(!soundness.contains("anneal_callsite"));
 }
@@ -264,12 +273,12 @@ fn test_generate_checks_struct_invariants() {
     write_call_site_project(
         &project,
         r#"
-            #[anneal(spec(invariant = "self.value.val <= 10"))]
+            #[anneal(spec(invariant::name = "value_bounded", invariant::prop = "self.value.val <= 10"))]
             pub struct Counter {
                 value: u32,
             }
 
-            #[anneal(spec(requires = "value.val <= 10"))]
+            #[anneal(spec(requires(name = "value_bounded", prop = "value.val <= 10")))]
             pub fn make(value: u32) -> Counter {
                 Counter { value }
             }
@@ -299,7 +308,10 @@ fn test_generate_checks_struct_invariants() {
     );
     let soundness = generated_soundness(&lean);
     assert!(soundness.contains("theorem make_soundness"));
-    assert!(soundness.contains("make value ⦃ result => (result.value.val <= 10) ⦄"));
+    assert!(soundness.contains(
+        "def make_post_value_bounded (value : Std.U32) (result : Counter) : Prop :=\n  result.value.val <= 10"
+    ));
+    assert!(soundness.contains("make value ⦃ result => (make_post_value_bounded value result) ⦄"));
     assert!(soundness.contains("theorem touch_soundness"));
     assert!(soundness.contains("call_read counter ⦃ result => True ⦄"));
     assert!(!soundness.contains("anneal_callsite"));
