@@ -263,6 +263,11 @@ fn soundness_module(
     }
 
     for (def_idx, def) in model.defs.iter().enumerate() {
+        out.push_str(&body_obligations_theorem(
+            def,
+            combined_specs.get(&def_idx),
+            &all_condition_def_names,
+        ));
         out.push_str(&step_soundness_theorem(
             def,
             combined_specs.get(&def_idx),
@@ -504,6 +509,31 @@ fn step_soundness_theorem(
     out.push_str(&step_proof_body(spec.and_then(|spec| spec.proof.as_ref()), &fallback_proof)?);
     out.push('\n');
     Ok(out)
+}
+
+fn body_obligations_theorem(
+    def: &ResultDef,
+    spec: Option<&crate::annotation_scan::FunctionSpec>,
+    condition_def_names: &[String],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "/-- Diagnostic Anneal body-obligations theorem for Rust function `{}`.\n\
+This checks body and callee obligations under this function's precondition, but intentionally \
+does not assert this function's own successful-result postcondition. -/\n",
+        def.rust_name
+    ));
+    out.push_str(&format!("theorem {}", body_obligations_theorem_name(def)));
+    let required_props =
+        spec.map(|spec| required_condition_hypotheses(def, &spec.spec)).unwrap_or_default();
+    theorem_arguments(&mut out, &def.binders, &required_props);
+    out.push_str(" :\n");
+    out.push_str("  ");
+    out.push_str(&def.application());
+    out.push_str(" ⦃ result => True ⦄ := by\n");
+    out.push_str(&indent_lean_block(&fallback_step_proof(def, condition_def_names)));
+    out.push_str("\n\n");
+    out
 }
 
 fn fallback_step_proof(def: &ResultDef, condition_def_names: &[String]) -> String {
@@ -834,6 +864,15 @@ fn lean_identifier_suffix(name: &str) -> String {
 fn soundness_theorem_name(def: &ResultDef) -> String {
     let suffix = lean_identifier_suffix(&def.name);
     if suffix.is_empty() { "soundness".into() } else { format!("{suffix}_soundness") }
+}
+
+fn body_obligations_theorem_name(def: &ResultDef) -> String {
+    let suffix = lean_identifier_suffix(&def.name);
+    if suffix.is_empty() {
+        "body_obligations_soundness".into()
+    } else {
+        format!("{suffix}_body_obligations_soundness")
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -1373,6 +1412,10 @@ mod tests {
 
         assert!(generated.lean.contains("import Demo.Funs"));
         assert!(generated.lean.contains("namespace demo"));
+        assert!(generated.lean.contains(
+            "theorem f_body_obligations_soundness\n    (x : Std.U32) :\n  f x ⦃ result => True ⦄ := by"
+        ));
+        assert!(!generated.lean.contains("@[step]\ntheorem f_body_obligations_soundness"));
         assert!(generated.lean.contains("@[step]\ntheorem f_soundness\n    (x : Std.U32) :"));
         assert!(generated.lean.contains("f x ⦃ result => True ⦄"));
         assert!(generated.lean.contains(" := by\n  unfold f\n  step* by\n"));
@@ -1405,6 +1448,9 @@ mod tests {
         assert_eq!(generated.matched_specs, vec![0]);
         assert!(generated.lean.contains(
             "def f_post1 (x : Std.U32) (result : Std.U32) : Prop :=\n  result.val >= x.val"
+        ));
+        assert!(generated.lean.contains(
+            "theorem f_body_obligations_soundness\n    (x : Std.U32) :\n  f x ⦃ result => True ⦄ := by"
         ));
         assert!(generated.lean.contains(
             "@[step]\ntheorem f_soundness\n    (x : Std.U32) :\n  f x ⦃ result => (f_post1 x result) ⦄"
@@ -1566,6 +1612,9 @@ mod tests {
         ));
         assert!(generated.lean.contains(
             "first | assumption | simp_all [Std.Do.WP.wp, Std.Do.PredTrans.apply, needs_positive_pre1] | simp [Std.Do.WP.wp, Std.Do.PredTrans.apply, needs_positive_pre1]"
+        ));
+        assert!(generated.lean.contains(
+            "theorem forwards_body_obligations_soundness\n    (x : Std.U32) :\n  forwards x ⦃ result => True ⦄ := by"
         ));
         assert!(!generated.lean.contains("anneal_callsite"));
     }

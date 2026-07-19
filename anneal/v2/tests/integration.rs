@@ -215,6 +215,9 @@ fn test_generate_checks_call_site_preconditions() {
     assert!(soundness.contains(
         "theorem forwards_soundness\n    (flag : Bool) :\n  forwards flag ⦃ result => True ⦄"
     ));
+    assert!(soundness.contains(
+        "theorem forwards_body_obligations_soundness\n    (flag : Bool) :\n  forwards flag ⦃ result => True ⦄"
+    ));
     assert!(!soundness.contains("anneal_callsite"));
 }
 
