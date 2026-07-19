@@ -135,6 +135,13 @@ pub(super) enum FlagKind {
 
 const PROP_CHILDREN: &[SchemaNode] = &[
     SchemaNode {
+        name: "name",
+        default_child: None,
+        value: Some(ValueSpec::new(ValueKind::String, TargetSet::FUNCTION_OR_STRUCT)),
+        flag: None,
+        children: &[],
+    },
+    SchemaNode {
         name: "attr",
         default_child: None,
         value: Some(ValueSpec::new(ValueKind::LeanAttr, TargetSet::ALL)),
