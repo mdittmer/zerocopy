@@ -1,9 +1,9 @@
-#[anneal(spec(invariant = "self.value.val <= 10"))]
+#[anneal(spec(invariant::name = "value_bounded", invariant::prop = "self.value.val <= 10"))]
 pub struct Counter {
     value: u32,
 }
 
-#[anneal(spec(requires = "value.val <= 10"))]
+#[anneal(spec(requires(name = "value_bounded", prop = "value.val <= 10")))]
 pub fn make(value: u32) -> Counter {
     Counter { value }
 }

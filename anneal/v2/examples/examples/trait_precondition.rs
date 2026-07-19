@@ -1,5 +1,5 @@
 pub trait Bounded {
-    #[anneal(spec(requires = "x.val <= 10"))]
+    #[anneal(spec(requires(name = "bounded_arg", prop = "x.val <= 10")))]
     fn bounded(x: u32) -> u32;
 }
 
@@ -11,7 +11,7 @@ impl Bounded for Impl {
     }
 }
 
-#[anneal(spec(requires = "x.val <= 10"))]
+#[anneal(spec(requires::name = "bounded_arg", requires::prop = "x.val <= 10"))]
 pub fn call_impl(x: u32) -> u32 {
     Impl::bounded(x)
 }

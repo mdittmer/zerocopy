@@ -194,7 +194,7 @@ pub enum LeanAttrs {
 
 impl Default for LeanAttrs {
     fn default() -> Self {
-        Self::Attrs(vec![LeanAttr::AttrString(String::from("step"))])
+        Self::empty()
     }
 }
 

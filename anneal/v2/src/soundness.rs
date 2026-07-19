@@ -129,6 +129,7 @@ struct ResultDef {
     name: String,
     binders: Vec<String>,
     args: Vec<String>,
+    output_type: String,
     required_structs: Vec<StructPropUse>,
     ensured_structs: Vec<StructPropUse>,
     unsupported_structs: Vec<UnsupportedStructUse>,
@@ -250,8 +251,24 @@ fn soundness_module(
             || !spec.spec.invariants.is_empty()
     });
 
+    let all_condition_def_names = combined_specs
+        .iter()
+        .flat_map(|(def_idx, spec)| condition_def_names(&model.defs[*def_idx], &spec.spec))
+        .collect::<Vec<_>>();
+
     for (def_idx, def) in model.defs.iter().enumerate() {
-        out.push_str(&step_soundness_theorem(def, combined_specs.get(&def_idx), allow_sorry)?);
+        if let Some(spec) = combined_specs.get(&def_idx) {
+            out.push_str(&condition_definitions(def, &spec.spec));
+        }
+    }
+
+    for (def_idx, def) in model.defs.iter().enumerate() {
+        out.push_str(&step_soundness_theorem(
+            def,
+            combined_specs.get(&def_idx),
+            &all_condition_def_names,
+            allow_sorry,
+        )?);
     }
 
     out.push_str(&format!("end {}\n", model.namespace));
@@ -452,6 +469,7 @@ fn lean_proof_body(proof: &LeanProof) -> String {
 fn step_soundness_theorem(
     def: &ResultDef,
     spec: Option<&crate::annotation_scan::FunctionSpec>,
+    condition_def_names: &[String],
     _allow_sorry: bool,
 ) -> anyhow::Result<String> {
     let mut out = String::new();
@@ -472,8 +490,9 @@ fn step_soundness_theorem(
     out.push_str("@[step]\n");
     out.push_str(&format!("theorem {}", soundness_theorem_name(def)));
     let required_props =
-        spec.map(|spec| required_condition_hypotheses(&spec.spec)).unwrap_or_default();
-    let ensured_props = spec.map(|spec| ensured_condition_refs(&spec.spec)).unwrap_or_default();
+        spec.map(|spec| required_condition_hypotheses(def, &spec.spec)).unwrap_or_default();
+    let ensured_props =
+        spec.map(|spec| ensured_condition_refs(def, &spec.spec)).unwrap_or_default();
     theorem_arguments(&mut out, &def.binders, &required_props);
     out.push_str(" :\n");
     out.push_str("  ");
@@ -481,14 +500,16 @@ fn step_soundness_theorem(
     out.push_str(" ⦃ result => ");
     out.push_str(&prop_conjunction(&ensured_props));
     out.push_str(" ⦄");
-    let fallback_proof = fallback_step_proof(def);
+    let fallback_proof = fallback_step_proof(def, condition_def_names);
     out.push_str(&step_proof_body(spec.and_then(|spec| spec.proof.as_ref()), &fallback_proof)?);
     out.push('\n');
     Ok(out)
 }
 
-fn fallback_step_proof(def: &ResultDef) -> String {
-    let simp_args = "Std.Do.WP.wp, Std.Do.PredTrans.apply";
+fn fallback_step_proof(def: &ResultDef, condition_def_names: &[String]) -> String {
+    let mut simp_args = vec!["Std.Do.WP.wp".to_string(), "Std.Do.PredTrans.apply".to_string()];
+    simp_args.extend(condition_def_names.iter().cloned());
+    let simp_args = simp_args.join(", ");
     format!(
         "unfold {}\nstep* by\n  first | assumption | simp_all [{}] | simp [{}]\nall_goals try assumption\nall_goals try simp_all [{}]\nall_goals try simp [{}]",
         def.name, simp_args, simp_args, simp_args, simp_args
@@ -535,8 +556,18 @@ fn struct_invariant_props(
     invariant
         .invariants
         .iter()
-        .map(|prop| Prop::from(replace_lean_identifier(lean_prop_source(prop), "self", value)))
+        .map(|prop| replace_lean_identifier_in_prop(prop, "self", value))
         .collect()
+}
+
+fn replace_lean_identifier_in_prop(prop: &Prop, from: &str, to: &str) -> Prop {
+    match prop {
+        Prop::Lean(lean) => Prop::Lean(crate::annotations::LeanProp {
+            name: lean.name.clone(),
+            attrs: lean.attrs.clone(),
+            prop: replace_lean_identifier(&lean.prop, from, to),
+        }),
+    }
 }
 
 fn replace_lean_identifier(source: &str, from: &str, to: &str) -> String {
@@ -563,10 +594,76 @@ fn is_lean_ident_char(ch: char) -> bool {
     ch.is_ascii_alphanumeric() || ch == '_' || ch == '\''
 }
 
-fn ensured_props(spec: &crate::annotations::Spec) -> Vec<Prop> {
-    let mut props = spec.ensures.clone();
-    props.extend(spec.invariants.clone());
-    props
+#[derive(Clone, Copy)]
+enum ConditionRole {
+    Pre,
+    Inv,
+    Post,
+}
+
+impl ConditionRole {
+    const fn stem(self) -> &'static str {
+        match self {
+            Self::Pre => "pre",
+            Self::Inv => "inv",
+            Self::Post => "post",
+        }
+    }
+
+    const fn description(self) -> &'static str {
+        match self {
+            Self::Pre => "precondition",
+            Self::Inv => "invariant",
+            Self::Post => "postcondition",
+        }
+    }
+
+    const fn binds_result(self) -> bool {
+        matches!(self, Self::Post)
+    }
+}
+
+fn condition_definitions(def: &ResultDef, spec: &crate::annotations::Spec) -> String {
+    let mut out = String::new();
+    for (idx, prop) in spec.requires.iter().enumerate() {
+        out.push_str(&condition_definition(def, ConditionRole::Pre, idx, prop));
+    }
+    for (idx, prop) in spec.invariants.iter().enumerate() {
+        out.push_str(&condition_definition(def, ConditionRole::Inv, idx, prop));
+    }
+    for (idx, prop) in spec.ensures.iter().enumerate() {
+        out.push_str(&condition_definition(def, ConditionRole::Post, idx, prop));
+    }
+    out
+}
+
+fn condition_definition(def: &ResultDef, role: ConditionRole, idx: usize, prop: &Prop) -> String {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "/-- Anneal {} for Rust function `{}`. -/\n",
+        role.description(),
+        def.rust_name
+    ));
+    out.push_str("@[simp]\n");
+    out.push_str("def ");
+    out.push_str(&condition_def_name(def, role, idx, prop));
+    let binders = condition_binders(def, role);
+    if !binders.is_empty() {
+        out.push(' ');
+        out.push_str(&binders.join(" "));
+    }
+    out.push_str(" : Prop :=\n");
+    out.push_str(&indent_lean_block(lean_prop_source(prop)));
+    out.push_str("\n\n");
+    out
+}
+
+fn condition_binders(def: &ResultDef, role: ConditionRole) -> Vec<String> {
+    let mut binders = def.binders.clone();
+    if role.binds_result() {
+        binders.push(format!("(result : {})", def.output_type));
+    }
+    binders
 }
 
 fn theorem_arguments(out: &mut String, binders: &[String], hypotheses: &[(String, String)]) {
@@ -587,23 +684,102 @@ fn theorem_arguments(out: &mut String, binders: &[String], hypotheses: &[(String
     }
 }
 
-fn required_condition_hypotheses(spec: &crate::annotations::Spec) -> Vec<(String, String)> {
+fn required_condition_hypotheses(
+    def: &ResultDef,
+    spec: &crate::annotations::Spec,
+) -> Vec<(String, String)> {
     let mut refs = spec
         .requires
         .iter()
         .enumerate()
         .map(|(idx, prop)| {
-            (format!("required_pre{}'", idx + 1), lean_prop_source(prop).to_string())
+            (
+                condition_hypothesis_name(ConditionRole::Pre, idx, prop),
+                condition_application(def, ConditionRole::Pre, idx, prop),
+            )
         })
         .collect::<Vec<_>>();
     refs.extend(spec.invariants.iter().enumerate().map(|(idx, prop)| {
-        (format!("preserved_inv{}'", idx + 1), lean_prop_source(prop).to_string())
+        (
+            condition_hypothesis_name(ConditionRole::Inv, idx, prop),
+            condition_application(def, ConditionRole::Inv, idx, prop),
+        )
     }));
     refs
 }
 
-fn ensured_condition_refs(spec: &crate::annotations::Spec) -> Vec<String> {
-    ensured_props(spec).iter().map(|prop| lean_prop_source(prop).to_string()).collect()
+fn ensured_condition_refs(def: &ResultDef, spec: &crate::annotations::Spec) -> Vec<String> {
+    let mut refs = spec
+        .ensures
+        .iter()
+        .enumerate()
+        .map(|(idx, prop)| condition_application(def, ConditionRole::Post, idx, prop))
+        .collect::<Vec<_>>();
+    refs.extend(
+        spec.invariants
+            .iter()
+            .enumerate()
+            .map(|(idx, prop)| condition_application(def, ConditionRole::Inv, idx, prop)),
+    );
+    refs
+}
+
+fn condition_application(def: &ResultDef, role: ConditionRole, idx: usize, prop: &Prop) -> String {
+    let mut args = def.args.clone();
+    if role.binds_result() {
+        args.push("result".into());
+    }
+    let name = condition_def_name(def, role, idx, prop);
+    if args.is_empty() { name } else { format!("{name} {}", args.join(" ")) }
+}
+
+fn condition_def_names(def: &ResultDef, spec: &crate::annotations::Spec) -> Vec<String> {
+    spec.requires
+        .iter()
+        .enumerate()
+        .map(|(idx, prop)| condition_def_name(def, ConditionRole::Pre, idx, prop))
+        .chain(
+            spec.invariants
+                .iter()
+                .enumerate()
+                .map(|(idx, prop)| condition_def_name(def, ConditionRole::Inv, idx, prop)),
+        )
+        .chain(
+            spec.ensures
+                .iter()
+                .enumerate()
+                .map(|(idx, prop)| condition_def_name(def, ConditionRole::Post, idx, prop)),
+        )
+        .collect()
+}
+
+fn condition_def_name(def: &ResultDef, role: ConditionRole, idx: usize, prop: &Prop) -> String {
+    let prefix = lean_identifier_suffix(&def.name);
+    let suffix = condition_suffix(role, idx, prop);
+    if prefix.is_empty() { suffix } else { format!("{prefix}_{suffix}") }
+}
+
+fn condition_hypothesis_name(role: ConditionRole, idx: usize, prop: &Prop) -> String {
+    let prefix = match role {
+        ConditionRole::Pre => "required",
+        ConditionRole::Inv => "preserved",
+        ConditionRole::Post => "ensured",
+    };
+    format!("{prefix}_{}'", condition_suffix(role, idx, prop))
+}
+
+fn condition_suffix(role: ConditionRole, idx: usize, prop: &Prop) -> String {
+    lean_prop_name(prop)
+        .map(lean_identifier_suffix)
+        .filter(|suffix| !suffix.is_empty())
+        .map(|suffix| format!("{}_{}", role.stem(), suffix))
+        .unwrap_or_else(|| format!("{}{}", role.stem(), idx + 1))
+}
+
+fn lean_prop_name(prop: &Prop) -> Option<&str> {
+    match prop {
+        Prop::Lean(lean) => lean.name.as_deref(),
+    }
 }
 
 fn prop_conjunction(props: &[String]) -> String {
@@ -790,6 +966,7 @@ fn model_from_translation_json(
             name: local_name,
             binders: signature.binders,
             args: signature.args,
+            output_type: signature.output_type,
             required_structs: signature.required_structs,
             ensured_structs: signature.ensured_structs,
             unsupported_structs: signature.unsupported_structs,
@@ -873,6 +1050,7 @@ fn unsupported_function_generics(fun: &charon_lib::ast::FunDecl) -> Option<Strin
 struct LlbcSignatureInfo {
     binders: Vec<String>,
     args: Vec<String>,
+    output_type: String,
     required_structs: Vec<StructPropUse>,
     ensured_structs: Vec<StructPropUse>,
     unsupported_structs: Vec<UnsupportedStructUse>,
@@ -892,6 +1070,7 @@ fn llbc_signature_info(
     let mut ensured_structs = Vec::new();
     let mut unsupported_structs = Vec::new();
     let mut mut_ref_structs = Vec::new();
+    let mut mut_ref_output_types = Vec::new();
     for (idx, ty) in info.inputs.iter().enumerate() {
         let name = info.arg_names.get(idx).cloned().unwrap_or_else(|| format!("arg{idx}"));
         let rendered_ty = lean_binder_type_from_llbc(ty, type_names)?;
@@ -904,6 +1083,7 @@ fn llbc_signature_info(
             Some((type_id, InputStructKind::MutRef)) => {
                 required_structs.push(StructPropUse { type_id, value: args[idx].clone() });
                 mut_ref_structs.push(type_id);
+                mut_ref_output_types.push(rendered_ty);
             }
             None => {
                 unsupported_structs.extend(nested_struct_uses(
@@ -932,9 +1112,16 @@ fn llbc_signature_info(
             .extend(nested_struct_uses(&info.output, "return type has nested struct type"));
     }
 
+    let output_type = if info.output.is_unit() && mut_ref_output_types.len() == 1 {
+        mut_ref_output_types.remove(0)
+    } else {
+        lean_type_from_llbc(&info.output, type_names)?
+    };
+
     Some(LlbcSignatureInfo {
         binders,
         args,
+        output_type,
         required_structs,
         ensured_structs,
         unsupported_structs,
@@ -1167,6 +1354,7 @@ mod tests {
             name: name.into(),
             binders: binders.iter().map(|binder| (*binder).into()).collect(),
             args: args.iter().map(|arg| (*arg).into()).collect(),
+            output_type: "Std.U32".into(),
             required_structs: Vec::new(),
             ensured_structs: Vec::new(),
             unsupported_structs: Vec::new(),
@@ -1216,7 +1404,10 @@ mod tests {
 
         assert_eq!(generated.matched_specs, vec![0]);
         assert!(generated.lean.contains(
-            "@[step]\ntheorem f_soundness\n    (x : Std.U32) :\n  f x ⦃ result => (result.val >= x.val) ⦄"
+            "def f_post1 (x : Std.U32) (result : Std.U32) : Prop :=\n  result.val >= x.val"
+        ));
+        assert!(generated.lean.contains(
+            "@[step]\ntheorem f_soundness\n    (x : Std.U32) :\n  f x ⦃ result => (f_post1 x result) ⦄"
         ));
         assert!(generated.lean.contains(" := by\n  simp\n"));
     }
@@ -1243,11 +1434,55 @@ mod tests {
         let generated =
             soundness_module("Demo", &model, &[(0, &spec)], &[], &[], false).unwrap().unwrap();
 
+        assert!(generated.lean.contains("def f_pre1 (x : Std.U32) : Prop :=\n  x.val > 0"));
+        assert!(generated.lean.contains(
+            "def f_post1 (x : Std.U32) (result : Std.U32) : Prop :=\n  result.val >= x.val"
+        ));
         assert!(
             generated
                 .lean
-                .contains("theorem f_soundness\n    (x : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : x.val > 0) :\n  f x ⦃ result => (result.val >= x.val) ⦄")
+                .contains("theorem f_soundness\n    (x : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : f_pre1 x) :\n  f x ⦃ result => (f_post1 x result) ⦄")
         );
+    }
+
+    #[test]
+    fn condition_names_are_used_as_definition_suffixes() {
+        let temp = tempfile::tempdir().unwrap();
+        let spec = crate::annotation_scan::FunctionSpec {
+            package_manifest_path: temp.path().join("Cargo.toml"),
+            path: temp.path().join("src/lib.rs"),
+            rust_name: "f".into(),
+            match_hint: crate::annotation_scan::FunctionMatchHint::Basename,
+            spec: crate::annotations::Spec {
+                requires: vec![crate::annotations::Prop::Lean(crate::annotations::LeanProp {
+                    name: Some("positive".into()),
+                    attrs: crate::annotations::LeanAttrs::default(),
+                    prop: "x.val > 0".into(),
+                })],
+                ensures: vec![crate::annotations::Prop::Lean(crate::annotations::LeanProp {
+                    name: Some("preserves_value".into()),
+                    attrs: crate::annotations::LeanAttrs::default(),
+                    prop: "result.val = x.val".into(),
+                })],
+                invariants: vec![],
+            },
+            proof: Some(crate::annotations::Proof::Lean(
+                crate::annotations::LeanProof::TacticProof("simp".into()),
+            )),
+        };
+        let model = model(vec![result_def("f", &["(x : Std.U32)"], &["x"])]);
+
+        let generated =
+            soundness_module("Demo", &model, &[(0, &spec)], &[], &[], false).unwrap().unwrap();
+
+        assert!(generated.lean.contains("def f_pre_positive (x : Std.U32) : Prop :="));
+        assert!(
+            generated
+                .lean
+                .contains("def f_post_preserves_value (x : Std.U32) (result : Std.U32) : Prop :=")
+        );
+        assert!(generated.lean.contains("(required_pre_positive' : f_pre_positive x)"));
+        assert!(generated.lean.contains("f x ⦃ result => (f_post_preserves_value x result) ⦄"));
     }
 
     #[test]
@@ -1271,10 +1506,10 @@ mod tests {
             soundness_module("Demo", &model, &[(0, &spec)], &[], &[], false).unwrap().unwrap();
 
         assert!(generated.lean.contains(
-            "theorem f_soundness\n    (x : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : x.val > 0) :\n  f x ⦃ result => True ⦄"
+            "theorem f_soundness\n    (x : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : f_pre1 x) :\n  f x ⦃ result => True ⦄"
         ));
         assert!(generated.lean.contains(
-            " := by\n  unfold f\n  step* by\n    first | assumption | simp_all [Std.Do.WP.wp, Std.Do.PredTrans.apply] | simp [Std.Do.WP.wp, Std.Do.PredTrans.apply]\n"
+            " := by\n  unfold f\n  step* by\n    first | assumption | simp_all [Std.Do.WP.wp, Std.Do.PredTrans.apply, f_pre1] | simp [Std.Do.WP.wp, Std.Do.PredTrans.apply, f_pre1]\n"
         ));
     }
 
@@ -1299,6 +1534,7 @@ mod tests {
                 name: "needs_positive".into(),
                 binders: vec!["(y : Std.U32)".into()],
                 args: vec!["y".into()],
+                output_type: "Std.U32".into(),
                 required_structs: Vec::new(),
                 ensured_structs: Vec::new(),
                 unsupported_structs: Vec::new(),
@@ -1308,6 +1544,7 @@ mod tests {
                 name: "forwards".into(),
                 binders: vec!["(x : Std.U32)".into()],
                 args: vec!["x".into()],
+                output_type: "Std.U32".into(),
                 required_structs: Vec::new(),
                 ensured_structs: Vec::new(),
                 unsupported_structs: Vec::new(),
@@ -1318,11 +1555,17 @@ mod tests {
             .unwrap()
             .unwrap();
 
+        assert!(
+            generated.lean.contains("def needs_positive_pre1 (y : Std.U32) : Prop :=\n  y.val > 0")
+        );
         assert!(generated.lean.contains(
-            "theorem needs_positive_soundness\n    (y : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : y.val > 0) :\n  needs_positive y ⦃ result => True ⦄"
+            "theorem needs_positive_soundness\n    (y : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : needs_positive_pre1 y) :\n  needs_positive y ⦃ result => True ⦄"
         ));
         assert!(generated.lean.contains(
             "theorem forwards_soundness\n    (x : Std.U32) :\n  forwards x ⦃ result => True ⦄ := by\n  unfold forwards\n  step*"
+        ));
+        assert!(generated.lean.contains(
+            "first | assumption | simp_all [Std.Do.WP.wp, Std.Do.PredTrans.apply, needs_positive_pre1] | simp [Std.Do.WP.wp, Std.Do.PredTrans.apply, needs_positive_pre1]"
         ));
         assert!(!generated.lean.contains("anneal_callsite"));
     }
@@ -1349,12 +1592,13 @@ mod tests {
         let generated =
             soundness_module("Demo", &model, &[(0, &spec)], &[], &[], false).unwrap().unwrap();
 
+        assert!(generated.lean.contains("def bounded_inv1 (x : Std.U32) : Prop :=\n  x.val <= 10"));
         assert!(
             generated
                 .lean
-                .contains("theorem bounded_soundness\n    (x : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (preserved_inv1' : x.val <= 10) :")
+                .contains("theorem bounded_soundness\n    (x : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (preserved_inv1' : bounded_inv1 x) :")
         );
-        assert!(generated.lean.contains("bounded x ⦃ result => (x.val <= 10) ⦄"));
+        assert!(generated.lean.contains("bounded x ⦃ result => (bounded_inv1 x) ⦄"));
     }
 
     #[test]
@@ -1380,6 +1624,7 @@ mod tests {
                 name: "bounded".into(),
                 binders: vec!["(y : Std.U32)".into()],
                 args: vec!["y".into()],
+                output_type: "Std.U32".into(),
                 required_structs: Vec::new(),
                 ensured_structs: Vec::new(),
                 unsupported_structs: Vec::new(),
@@ -1389,6 +1634,7 @@ mod tests {
                 name: "forwards".into(),
                 binders: vec!["(x : Std.U32)".into()],
                 args: vec!["x".into()],
+                output_type: "Std.U32".into(),
                 required_structs: Vec::new(),
                 ensured_structs: Vec::new(),
                 unsupported_structs: Vec::new(),
@@ -1402,7 +1648,7 @@ mod tests {
         assert!(
             generated
                 .lean
-                .contains("theorem bounded_soundness\n    (y : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (preserved_inv1' : y.val <= 10) :")
+                .contains("theorem bounded_soundness\n    (y : Std.U32)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (preserved_inv1' : bounded_inv1 y) :")
         );
         assert!(generated.lean.contains(
             "theorem forwards_soundness\n    (x : Std.U32) :\n  forwards x ⦃ result => True ⦄ := by\n  unfold forwards\n  step*"
@@ -1454,6 +1700,7 @@ mod tests {
             name: "gate.allowed".into(),
             binders: vec!["(g : gate.Gate)".into(), "(count : Std.U32)".into()],
             args: vec!["g".into(), "count".into()],
+            output_type: "Bool".into(),
             required_structs: Vec::new(),
             ensured_structs: Vec::new(),
             unsupported_structs: Vec::new(),
@@ -1491,6 +1738,7 @@ mod tests {
             name: "Impl.Insts.Trait_demoBounded.bounded".into(),
             binders: vec!["(x : Std.U32)".into()],
             args: vec!["x".into()],
+            output_type: "Std.U32".into(),
             required_structs: Vec::new(),
             ensured_structs: Vec::new(),
             unsupported_structs: Vec::new(),
@@ -1518,6 +1766,7 @@ mod tests {
             name: "touch".into(),
             binders: vec!["(counter : Counter)".into()],
             args: vec!["counter".into()],
+            output_type: "Counter".into(),
             required_structs: vec![StructPropUse { type_id: 0, value: "counter".into() }],
             ensured_structs: vec![StructPropUse { type_id: 0, value: "result".into() }],
             unsupported_structs: Vec::new(),
@@ -1528,10 +1777,20 @@ mod tests {
         let generated =
             soundness_module("Demo", &model, &[], &[(0, &invariant)], &[], true).unwrap().unwrap();
 
+        assert!(
+            generated.lean.contains(
+                "def touch_pre1 (counter : Counter) : Prop :=\n  counter.value.val <= 10"
+            )
+        );
         assert!(generated.lean.contains(
-            "theorem touch_soundness\n    (counter : Counter)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : counter.value.val <= 10) :"
+            "def touch_post1 (counter : Counter) (result : Counter) : Prop :=\n  result.value.val <= 10"
         ));
-        assert!(generated.lean.contains("touch counter ⦃ result => (result.value.val <= 10) ⦄"));
+        assert!(generated.lean.contains(
+            "theorem touch_soundness\n    (counter : Counter)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : touch_pre1 counter) :"
+        ));
+        assert!(
+            generated.lean.contains("touch counter ⦃ result => (touch_post1 counter result) ⦄")
+        );
     }
 
     #[test]
@@ -1550,6 +1809,7 @@ mod tests {
                 name: "touch".into(),
                 binders: vec!["(counter : Counter)".into()],
                 args: vec!["counter".into()],
+                output_type: "Counter".into(),
                 required_structs: vec![StructPropUse { type_id: 0, value: "counter".into() }],
                 ensured_structs: vec![StructPropUse { type_id: 0, value: "result".into() }],
                 unsupported_structs: Vec::new(),
@@ -1559,6 +1819,7 @@ mod tests {
                 name: "caller".into(),
                 binders: vec!["(c : Counter)".into()],
                 args: vec!["c".into()],
+                output_type: "Unit".into(),
                 required_structs: vec![StructPropUse { type_id: 0, value: "c".into() }],
                 ensured_structs: Vec::new(),
                 unsupported_structs: Vec::new(),
@@ -1571,7 +1832,7 @@ mod tests {
             soundness_module("Demo", &model, &[], &[(0, &invariant)], &[], true).unwrap().unwrap();
 
         assert!(generated.lean.contains(
-            "theorem caller_soundness\n    (c : Counter)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : c.value.val <= 10) :\n  caller c ⦃ result => True ⦄"
+            "theorem caller_soundness\n    (c : Counter)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre1' : caller_pre1 c) :\n  caller c ⦃ result => True ⦄"
         ));
         assert!(!generated.lean.contains("anneal_callsite"));
     }
@@ -1591,6 +1852,7 @@ mod tests {
             name: "wrap".into(),
             binders: vec!["(counter : Counter)".into()],
             args: vec!["counter".into()],
+            output_type: "Unit".into(),
             required_structs: Vec::new(),
             ensured_structs: Vec::new(),
             unsupported_structs: vec![UnsupportedStructUse {
