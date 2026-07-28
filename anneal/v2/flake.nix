@@ -7,7 +7,7 @@
     charon.url = "github:aeneasverif/charon/527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59";
     charon.inputs.nixpkgs.follows = "nixpkgs";
     charon.inputs.flake-utils.follows = "flake-utils";
-    aeneas.url = "github:mdittmer/aeneas/ub";
+    aeneas.url = "github:mdittmer/aeneas/ub__get_unchecked";
     aeneas.inputs.charon.follows = "charon";
   };
 
