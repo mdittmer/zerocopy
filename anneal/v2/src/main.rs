@@ -79,7 +79,7 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub no_progress: bool,
 
-    /// Generate Lean files and workspace metadata, but do not run Lake
+    /// Generate Lean files and metadata, but skip Lake and the semantic axiom audit
     #[arg(long)]
     pub no_lean_build: bool,
 
@@ -129,6 +129,7 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &packages,
         show_progress,
     )?;
+    crate::annotation_scan::validate_expansion_markers(&locked_roots, &packages, &annotations)?;
     crate::aeneas::run_aeneas(&toolchain, &locked_roots, &packages, show_progress)?;
     crate::soundness::write_soundness(
         &locked_roots,
@@ -138,7 +139,13 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     )?;
     crate::lake::prepare_workspace(&toolchain, &locked_roots, &packages)?;
     if !args.no_lean_build {
-        crate::lake::build_workspace(&toolchain, &locked_roots, show_progress)?;
+        crate::lake::build_workspace(
+            &toolchain,
+            &locked_roots,
+            &packages,
+            args.resolve_args.allow_sorry,
+            show_progress,
+        )?;
     }
     Ok(())
 }

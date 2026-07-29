@@ -1,8 +1,10 @@
+use anneal_macros::anneal;
+
 pub fn unannotated_identity(flag: bool) -> bool {
     flag
 }
 
-#[anneal(spec(requires::name = "flag_true", requires::prop = "flag = true"))]
+#[anneal(spec(requires::name = "flag_true", requires::prop = flag == true))]
 pub fn needs_true(flag: bool) -> bool {
     flag
 }

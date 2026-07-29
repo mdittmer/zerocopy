@@ -12,28 +12,35 @@ use quote::ToTokens as _;
 use syn::parse::{Parse, ParseStream};
 use syn::{Expr, ExprLit, Lit, LitStr, Token, bracketed};
 
-use crate::annotations::error::{AnnotationError, Result};
-use crate::annotations::parse::{MatchedEntry, MatchedPayload, path_string};
-use crate::annotations::schema::{AnnotationTarget, FlagKind, ValueKind};
-use crate::annotations::{
+use crate::error::{AnnotationError, Result};
+use crate::parse::{MatchedEntry, MatchedPayload, path_string};
+use crate::schema::{AnnotationTarget, FlagKind, ValueKind};
+use crate::{
     Attribute, AttributeData, Attributes, LeanArg, LeanArgs, LeanAttr, LeanAttrs, LeanProof,
-    LeanProp, LeanTheoremDefinition, LeanType, Proof, Prop, Spec, Theorem, TheoremDefinition,
+    LeanProp, LeanTheoremDefinition, LeanType, Proof, Prop, RustProp, Spec, Theorem,
+    TheoremDefinition,
 };
 
 pub(crate) fn parse_attributes(
     attrs: &[syn::Attribute],
     target: AnnotationTarget,
 ) -> Result<Attributes> {
-    crate::annotations::parse::parse_matches(attrs, target)?
-        .into_iter()
-        .map(attribute_from_match)
-        .collect()
+    crate::parse::parse_matches(attrs, target)?.into_iter().map(attribute_from_match).collect()
 }
 
 fn attribute_from_match(matched: MatchedEntry<'_>) -> Result<Attribute> {
     let Some(kind) = matched.path.first().copied() else {
         return Err(AnnotationError::UnknownPath(String::new()));
     };
+
+    if matches!(matched.path.as_slice(), ["theorem"])
+        && matches!(&matched.payload, MatchedPayload::Flag)
+    {
+        return Ok(Attribute {
+            data: AttributeData::RustTheorem,
+            domains: Attribute::default_domains(),
+        });
+    }
 
     let mut builder = match kind {
         "spec" => AttributeBuilder::Spec { spec: Spec::default(), domains: Domains::default() },
@@ -192,14 +199,19 @@ fn flush_pending_prop(
     }
 
     let prop_path = format!("spec::{field}::prop");
-    let Prop::Lean(mut lean) = required(parts.prop, &prop_path)?;
-    if let Some(name) = parts.name {
-        lean.name = Some(name);
-    }
+    let mut prop = required(parts.prop, &prop_path)?;
+    set_prop_name(&mut prop, parts.name);
     if let Some(attrs) = parts.attrs {
-        lean.attrs = attrs;
+        match &mut prop {
+            Prop::Lean(lean) => lean.attrs = attrs,
+            Prop::Rust(_) => {
+                return Err(AnnotationError::UnsupportedValue(format!(
+                    "Lean attributes are not supported on Rust proposition `{prop_path}`"
+                )));
+            }
+        }
     }
-    push_spec_prop(builder, &["spec", field], Prop::Lean(lean))
+    push_spec_prop(builder, &["spec", field], prop)
 }
 
 struct Domains {
@@ -232,7 +244,7 @@ impl Domains {
 enum AttributeBuilder {
     Spec { spec: Spec, domains: Domains },
     Theorem { theorem: TheoremBuilder, domains: Domains },
-    Proof { proof: Option<LeanProof>, domains: Domains },
+    Proof { proof: Option<Proof>, domains: Domains },
 }
 
 impl AttributeBuilder {
@@ -246,9 +258,9 @@ impl AttributeBuilder {
                 domains: domains.values,
             }),
             AttributeBuilder::Proof { proof, domains } => Ok(Attribute {
-                data: AttributeData::Proof(Proof::Lean(
-                    proof.unwrap_or_else(|| LeanProof::TacticProof("sorry".into())),
-                )),
+                data: AttributeData::Proof(
+                    proof.unwrap_or_else(|| Proof::Lean(LeanProof::TacticProof("sorry".into()))),
+                ),
                 domains: domains.values,
             }),
         }
@@ -299,10 +311,14 @@ fn apply_flag(
     flag: Option<FlagKind>,
 ) -> Result<()> {
     match (path, flag) {
+        ([theorem], Some(FlagKind::RustTheorem)) if *theorem == "theorem" => Ok(()),
+        ([proof, auto], Some(FlagKind::AutoProof)) if *proof == "proof" && *auto == "auto" => {
+            set_proof(builder, Proof::Auto, path)
+        }
         ([proof, lean, tactic], Some(FlagKind::LeanProofTacticSorry))
             if *proof == "proof" && *lean == "lean" && *tactic == "tactic" =>
         {
-            set_proof(builder, LeanProof::TacticProof("sorry".into()), path)
+            set_proof(builder, Proof::Lean(LeanProof::TacticProof("sorry".into())), path)
         }
         _ => Err(AnnotationError::UnsupportedFlag(path_string(path))),
     }
@@ -380,12 +396,12 @@ fn apply_value(
         ([proof, lean, mode], Some(ValueKind::LeanProofTactic))
             if *proof == "proof" && *lean == "lean" && *mode == "tactic" =>
         {
-            set_proof(builder, LeanProof::TacticProof(string_value(tokens)?), path)
+            set_proof(builder, Proof::Lean(LeanProof::TacticProof(string_value(tokens)?)), path)
         }
         ([proof, lean, mode], Some(ValueKind::LeanProofTerm))
             if *proof == "proof" && *lean == "lean" && *mode == "term" =>
         {
-            set_proof(builder, LeanProof::TermProof(string_value(tokens)?), path)
+            set_proof(builder, Proof::Lean(LeanProof::TermProof(string_value(tokens)?)), path)
         }
         _ => Err(AnnotationError::UnknownPath(path_string(path))),
     }
@@ -431,11 +447,7 @@ fn merge_theorem_attrs(
     merge_lean_attrs(&mut theorem_builder(builder)?.attrs, attrs, path)
 }
 
-fn set_proof(
-    builder: &mut AttributeBuilder,
-    value: LeanProof,
-    path: &[&'static str],
-) -> Result<()> {
+fn set_proof(builder: &mut AttributeBuilder, value: Proof, path: &[&'static str]) -> Result<()> {
     match builder {
         AttributeBuilder::Proof { proof, .. } => set_once(proof, value, path),
         _ => Err(AnnotationError::UnknownPath(path_string(path))),
@@ -508,14 +520,26 @@ fn prop_from_children(path: &[&'static str], children: Vec<MatchedEntry<'_>>) ->
     }
 
     let prop_path = format!("{}::prop", path_string(path));
-    let Prop::Lean(mut lean) = required(prop, &prop_path)?;
-    if let Some(name) = name {
-        lean.name = Some(name);
-    }
+    let mut prop = required(prop, &prop_path)?;
+    set_prop_name(&mut prop, name);
     if let Some(attrs) = attrs {
-        lean.attrs = attrs;
+        match &mut prop {
+            Prop::Lean(lean) => lean.attrs = attrs,
+            Prop::Rust(_) => {
+                return Err(AnnotationError::UnsupportedValue(format!(
+                    "Lean attributes are not supported on Rust proposition `{prop_path}`"
+                )));
+            }
+        }
     }
-    Ok(Prop::Lean(lean))
+    Ok(prop)
+}
+
+fn set_prop_name(prop: &mut Prop, name: Option<String>) {
+    match prop {
+        Prop::Rust(rust) => rust.name = name,
+        Prop::Lean(lean) => lean.name = name,
+    }
 }
 
 fn set_once<T>(slot: &mut Option<T>, value: T, path: &[&'static str]) -> Result<()> {
@@ -527,14 +551,13 @@ fn set_once<T>(slot: &mut Option<T>, value: T, path: &[&'static str]) -> Result<
 }
 
 fn prop_scalar_value(tokens: TokenStream) -> Result<Prop> {
-    let expr = expr_value(tokens)?;
-    let Expr::Lit(ExprLit { lit: Lit::Str(value), .. }) = &expr else {
-        return Err(AnnotationError::UnsupportedValue(format!(
-            "Rust-language propositions are not implemented yet; write Lean propositions as string literals, got `{}`",
-            quote_expr(&expr)
-        )));
-    };
-    Ok(Prop::Lean(LeanProp::from(value.value())))
+    let expr = expr_value(tokens.clone())?;
+    match &expr {
+        Expr::Lit(ExprLit { lit: Lit::Str(value), .. }) => {
+            Ok(Prop::Lean(LeanProp::from(value.value())))
+        }
+        _ => Ok(Prop::Rust(RustProp::new(tokens))),
+    }
 }
 
 fn domain_values(kind: ValueKind, tokens: TokenStream) -> Result<Vec<String>> {

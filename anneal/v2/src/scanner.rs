@@ -37,26 +37,28 @@ impl From<&crate::resolve::AnnealTarget> for AnnealArtifact {
 
 impl From<&cargo_metadata::Package> for AnnealArtifact {
     fn from(package: &cargo_metadata::Package) -> Self {
+        let library_target = package.targets.iter().find_map(|target| {
+            target
+                .kind
+                .iter()
+                .find_map(|kind| crate::resolve::AnnealTargetKind::try_from(kind).ok())
+                .filter(crate::resolve::AnnealTargetKind::is_lib)
+                .map(|kind| (target, kind))
+        });
+        let target_kind =
+            library_target.map(|(_, kind)| kind).unwrap_or(crate::resolve::AnnealTargetKind::Lib);
+        let target_name = library_target
+            .map(|(target, _)| target.name.clone())
+            .unwrap_or_else(|| package.name.to_string());
         Self {
             name: crate::resolve::AnnealTargetName {
                 package_name: package.name.clone(),
-                target_name: package.name.to_string(),
-                kind: crate::resolve::AnnealTargetKind::Lib,
+                target_name,
+                kind: target_kind,
             },
-            target_kind: crate::resolve::AnnealTargetKind::Lib,
+            target_kind,
             manifest_path: package.manifest_path.as_std_path().to_owned(),
-            src_path: package
-                .targets
-                .iter()
-                .find(|target| {
-                    target.kind.iter().any(|kind| {
-                        matches!(
-                            kind,
-                            cargo_metadata::TargetKind::Lib | cargo_metadata::TargetKind::RLib
-                        )
-                    })
-                })
-                .map(|target| target.src_path.as_std_path().to_owned()),
+            src_path: library_target.map(|(target, _)| target.src_path.as_std_path().to_owned()),
         }
     }
 }

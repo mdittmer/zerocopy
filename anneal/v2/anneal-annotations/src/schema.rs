@@ -130,6 +130,8 @@ pub(super) enum ValueKind {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FlagKind {
+    RustTheorem,
+    AutoProof,
     LeanProofTacticSorry,
 }
 
@@ -322,6 +324,13 @@ const PROOF_LEAN_CHILDREN: &[SchemaNode] = &[
 
 const PROOF_CHILDREN: &[SchemaNode] = &[
     SchemaNode {
+        name: "auto",
+        default_child: None,
+        value: None,
+        flag: Some(FlagSpec::new(FlagKind::AutoProof, TargetSet::ALL)),
+        children: &[],
+    },
+    SchemaNode {
         name: "lean",
         default_child: Some("tactic"),
         value: None,
@@ -356,7 +365,7 @@ const ANNEAL_CHILDREN: &[SchemaNode] = &[
         name: "theorem",
         default_child: None,
         value: None,
-        flag: None,
+        flag: Some(FlagSpec::new(FlagKind::RustTheorem, TargetSet::ALL)),
         children: THEOREM_CHILDREN,
     },
     SchemaNode {

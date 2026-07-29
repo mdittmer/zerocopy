@@ -1,5 +1,7 @@
+use anneal_macros::anneal;
+
 pub trait Bounded {
-    #[anneal(spec(requires(name = "bounded_arg", prop = "x.val <= 10")))]
+    #[anneal(spec(requires(name = "bounded_arg", prop = x <= 10)))]
     fn bounded(x: u32) -> u32;
 }
 
@@ -11,7 +13,7 @@ impl Bounded for Impl {
     }
 }
 
-#[anneal(spec(requires::name = "bounded_arg", requires::prop = "x.val <= 10"))]
+#[anneal(spec(requires::name = "bounded_arg", requires::prop = x <= 10))]
 pub fn call_impl(x: u32) -> u32 {
     Impl::bounded(x)
 }

@@ -11,6 +11,8 @@
 
 use anyhow::Context as _;
 
+const AXIOM_AUDIT_SOURCE: &str = include_str!("../lean/AnnealAxiomAudit.lean");
+
 /// Writes the Lake workspace metadata for generated Lean artifacts.
 pub fn prepare_workspace(
     toolchain: &crate::setup::Toolchain,
@@ -49,6 +51,8 @@ pub fn prepare_workspace(
 pub fn build_workspace(
     toolchain: &crate::setup::Toolchain,
     roots: &crate::resolve::LockedRoots,
+    packages: &[crate::scanner::AnnealArtifact],
+    allow_sorry: bool,
     show_progress: bool,
 ) -> anyhow::Result<()> {
     let workspace = roots.lean_root();
@@ -72,14 +76,85 @@ pub fn build_workspace(
         Ok(())
     })?;
 
-    if output.status.success() {
-        Ok(())
-    } else {
+    if !output.status.success() {
         eprintln!("=== Lake failure output ===");
         for line in output.stderr_lines {
             eprintln!("{line}");
         }
-        anyhow::bail!("Lake failed with status: {}", output.status)
+        anyhow::bail!("Lake failed with status: {}", output.status);
+    }
+
+    audit_soundness_axioms(toolchain, roots, packages, allow_sorry, show_progress)
+}
+
+/// Loads the compiled soundness modules in a fixed checker and rejects
+/// declarations that extended Lean's trusted axiom base.
+///
+/// The checker itself imports only Lean. It loads each already-compiled
+/// `Soundness` olean at runtime, with imported environment extensions disabled,
+/// and keys declarations by their recorded module id rather than namespace.
+/// Consequently proof metaprogramming cannot evade the audit merely by adding
+/// an axiom under an unrelated name.
+fn audit_soundness_axioms(
+    toolchain: &crate::setup::Toolchain,
+    roots: &crate::resolve::LockedRoots,
+    packages: &[crate::scanner::AnnealArtifact],
+    allow_sorry: bool,
+    show_progress: bool,
+) -> anyhow::Result<()> {
+    let workspace = roots.lean_root();
+    let mut modules = packages
+        .iter()
+        .filter_map(|artifact| {
+            let soundness = artifact.lean_dir_path(roots).join("Soundness.lean");
+            soundness.is_file().then(|| module_name_from_path(&workspace, &soundness))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    modules.sort();
+    modules.dedup();
+    if modules.is_empty() {
+        return Ok(());
+    }
+
+    // Write this after Lake finishes so proof metaprogramming cannot leave a
+    // modified source file for the checker to compile.
+    let audit_path = workspace.join("AnnealAxiomAudit.lean");
+    std::fs::write(&audit_path, AXIOM_AUDIT_SOURCE)
+        .with_context(|| format!("Failed to write {}", audit_path.display()))?;
+
+    let pb = show_progress.then(|| {
+        let pb = indicatif::ProgressBar::new_spinner();
+        pb.set_style(
+            indicatif::ProgressStyle::default_spinner().template("{spinner:.green} {msg}").unwrap(),
+        );
+        pb.set_message("Auditing generated Lean axioms...");
+        pb
+    });
+
+    let mut cmd = toolchain.command(crate::setup::Tool::Lake)?;
+    cmd.current_dir(&workspace)
+        .args(["--keep-toolchain", "--old", "env", "lean", "--run"])
+        .arg(&audit_path);
+    if allow_sorry {
+        cmd.arg("--allow-sorry");
+    }
+    cmd.args(&modules);
+
+    let output = crate::util::run_command_with_progress(cmd, pb, |line, pb| {
+        if let Some(pb) = pb {
+            pb.set_message(line.to_string());
+        }
+        log::debug!("Lean axiom audit: {line}");
+        Ok(())
+    })?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        eprintln!("=== Lean axiom audit failure output ===");
+        for line in output.stderr_lines {
+            eprintln!("{line}");
+        }
+        anyhow::bail!("Lean axiom audit failed with status: {}", output.status)
     }
 }
 

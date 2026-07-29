@@ -13,8 +13,8 @@ use syn::parse::Parser as _;
 use syn::parse::{Parse, ParseStream};
 use syn::{Meta, Path, Token, parenthesized};
 
-use crate::annotations::error::{AnnotationError, Result};
-use crate::annotations::schema::{ANNEAL_SCHEMA, AnnotationTarget, SchemaNode};
+use crate::error::{AnnotationError, Result};
+use crate::schema::{ANNEAL_SCHEMA, AnnotationTarget, SchemaNode};
 
 #[derive(Clone, Debug)]
 pub(super) struct MatchedEntry<'a> {
@@ -66,7 +66,7 @@ fn parse_raw_entry(input: ParseStream<'_>) -> syn::Result<RawEntry> {
 
     let kind = if input.peek(Token![=]) {
         input.parse::<Token![=]>()?;
-        RawEntryKind::Value(parse_value_tokens(input)?)
+        RawEntryKind::Value(parse_value_tokens(input, &path)?)
     } else if input.peek(syn::token::Paren) {
         let content;
         parenthesized!(content in input);
@@ -78,7 +78,13 @@ fn parse_raw_entry(input: ParseStream<'_>) -> syn::Result<RawEntry> {
     Ok(RawEntry { path, kind })
 }
 
-fn parse_value_tokens(input: ParseStream<'_>) -> syn::Result<TokenStream> {
+fn parse_value_tokens(input: ParseStream<'_>, path: &[String]) -> syn::Result<TokenStream> {
+    if path.last().is_some_and(|segment| {
+        matches!(segment.as_str(), "spec" | "requires" | "ensures" | "invariant" | "prop")
+    }) {
+        return input.parse::<syn::Expr>().map(|expr| expr.into_token_stream());
+    }
+
     let mut tokens = TokenStream::new();
     while !input.is_empty() && !input.peek(Token![,]) {
         tokens.extend(std::iter::once(input.parse::<TokenTree>()?));
@@ -109,8 +115,20 @@ pub(super) fn parse_matches(
     Ok(out)
 }
 
-fn is_anneal_attribute(meta: &Meta) -> Result<bool> {
-    Ok(path_segments(meta.path())?.first().map(String::as_str) == Some("anneal"))
+pub(crate) fn is_anneal_attribute(meta: &Meta) -> Result<bool> {
+    Ok(anneal_path_prefix_len(&path_segments(meta.path())?).is_some())
+}
+
+fn anneal_path_prefix_len(path: &[String]) -> Option<usize> {
+    if path.first().is_some_and(|segment| segment == "anneal") {
+        Some(1)
+    } else if matches!(path, [package, macro_name]
+        if package == "anneal_macros" && macro_name == "anneal")
+    {
+        Some(2)
+    } else {
+        None
+    }
 }
 
 fn cfg_attr_wraps_anneal(meta: &Meta) -> Result<bool> {
@@ -138,10 +156,10 @@ fn parse_anneal_attribute(
     target: AnnotationTarget,
 ) -> Result<Vec<MatchedEntry<'static>>> {
     let mut path = path_segments(meta.path())?;
-    if path.first().map(String::as_str) != Some("anneal") {
+    let Some(prefix_len) = anneal_path_prefix_len(&path) else {
         return Err(AnnotationError::UnknownPath(path.join("::")));
-    }
-    path.remove(0);
+    };
+    path.drain(..prefix_len);
 
     if path.is_empty() {
         let Meta::List(list) = meta else {

@@ -1,0 +1,18 @@
+[package]
+name = "anneal-macros"
+edition = "2024"
+version = "0.1.0-alpha.22"
+description = "Attribute macros for Anneal specifications."
+authors = ["Joshua Liebow-Feeser <joshlf@google.com>"]
+license = "BSD-2-Clause OR Apache-2.0 OR MIT"
+repository = "https://github.com/google/zerocopy/tree/main/anneal"
+include = ["src/**/*.rs", "tests/**/*.rs", "LICENSE-*"]
+
+[lib]
+proc-macro = true
+
+[dependencies]
+anneal-annotations = { path = "../anneal-annotations", version = "0.1.0-alpha.22" }
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "parsing", "visit"] }

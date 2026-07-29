@@ -161,7 +161,7 @@ fn test_generate_checks_call_site_preconditions() {
     write_call_site_project(
         &good_project,
         r#"
-            #[anneal(spec(requires(name = "flag_true", prop = "flag = true")))]
+            #[anneal(spec(requires(name = "flag_true", prop = flag == true)))]
             pub fn needs_true(flag: bool) -> bool { flag }
 
             pub fn forwards(flag: bool) -> bool {
@@ -171,12 +171,18 @@ fn test_generate_checks_call_site_preconditions() {
                     false
                 }
             }
+
+            #[anneal(
+                spec(requires(name = "self_equal", prop = value == value)),
+                proof(lean::tactic = "unfold identity_with_proof\nstep*"),
+            )]
+            pub fn identity_with_proof(value: u32) -> u32 { value }
         "#,
     );
     write_call_site_project(
         &bad_project,
         r#"
-            #[anneal(spec(requires::name = "flag_true", requires::prop = "flag = true"))]
+            #[anneal(spec(requires::name = "flag_true", requires::prop = flag == true))]
             pub fn needs_true(flag: bool) -> bool { flag }
 
             pub fn forwards(flag: bool) -> bool { needs_true(flag) }
@@ -195,6 +201,13 @@ fn test_generate_checks_call_site_preconditions() {
         String::from_utf8_lossy(&good_output.stdout),
         String::from_utf8_lossy(&good_output.stderr)
     );
+    let good_soundness = generated_soundness(&good_lean);
+    let strong = good_soundness.find("theorem identity_with_proof_soundness").unwrap();
+    let diagnostic =
+        good_soundness.find("theorem identity_with_proof_body_obligations_soundness").unwrap();
+    assert!(strong < diagnostic, "explicit proof theorem must precede its derived diagnostic");
+    assert!(good_soundness.contains("(required_pre_self_equal' : "));
+    assert!(good_soundness.contains("WP.spec_mono (identity_with_proof_soundness value"));
 
     let bad_lean = temp_dir.path().join("bad_lean");
     let bad_output =
@@ -206,12 +219,13 @@ fn test_generate_checks_call_site_preconditions() {
         String::from_utf8_lossy(&bad_output.stderr)
     );
     let soundness = generated_soundness(&bad_lean);
-    assert!(
-        soundness.contains("def needs_true_pre_flag_true (flag : Bool) : Prop :=\n  flag = true")
-    );
-    assert!(soundness.contains(
-        "theorem needs_true_soundness\n    (flag : Bool)\n    /- -------------------- Anneal hypotheses -------------------- -/\n    (required_pre_flag_true' : needs_true_pre_flag_true flag) :\n  needs_true flag ⦃ result => True ⦄"
-    ));
+    assert!(!soundness.contains("def needs_true_pre_flag_true"));
+    assert!(soundness.contains("anneal__needs_true"));
+    assert!(soundness.contains("flag_true"));
+    assert!(soundness.contains("⦃ holds => holds = true ⦄"));
+    assert!(soundness.contains("theorem needs_true_soundness"));
+    assert!(soundness.contains("(required_pre_flag_true' : "));
+    assert!(soundness.contains("needs_true flag ⦃ result => True ⦄"));
     assert!(soundness.contains(
         "theorem forwards_soundness\n    (flag : Bool) :\n  forwards flag ⦃ result => True ⦄"
     ));
@@ -230,17 +244,18 @@ fn test_generate_expands_trait_method_specs_to_impls() {
         &project,
         r#"
             pub trait Bounded {
-                #[anneal(spec(requires(name = "bounded_arg", prop = "x.val <= 10")))]
+                #[anneal(spec(requires(name = "bounded_arg", prop = x <= 10)))]
                 fn bounded(x: u32) -> u32;
             }
 
             pub struct Impl;
 
             impl Bounded for Impl {
+                #[anneal(proof(auto))]
                 fn bounded(x: u32) -> u32 { x }
             }
 
-            #[anneal(spec(requires::name = "bounded_arg", requires::prop = "x.val <= 10"))]
+            #[anneal(spec(requires::name = "bounded_arg", requires::prop = x <= 10))]
             pub fn call_impl(x: u32) -> u32 { Impl::bounded(x) }
         "#,
     );
@@ -258,12 +273,9 @@ fn test_generate_expands_trait_method_specs_to_impls() {
     );
     let soundness = generated_soundness(&lean);
     assert!(soundness.contains("Impl_Insts_Call_site_demoBounded_bounded_soundness"));
-    assert!(soundness.contains(
-        "def Impl_Insts_Call_site_demoBounded_bounded_pre_bounded_arg (x : Std.U32) : Prop :=\n  x.val <= 10"
-    ));
-    assert!(soundness.contains(
-        "(required_pre_bounded_arg' : Impl_Insts_Call_site_demoBounded_bounded_pre_bounded_arg x)"
-    ));
+    assert!(!soundness.contains("def Impl_Insts_Call_site_demoBounded_bounded_pre_bounded_arg"));
+    assert!(soundness.contains("anneal__bounded__bounded_arg"));
+    assert!(soundness.contains("(required_pre_bounded_arg' : "));
     assert!(soundness.contains("call_impl x ⦃ result => True ⦄"));
     assert!(!soundness.contains("anneal_callsite"));
 }
@@ -276,12 +288,15 @@ fn test_generate_checks_struct_invariants() {
     write_call_site_project(
         &project,
         r#"
-            #[anneal(spec(invariant::name = "value_bounded", invariant::prop = "self.value.val <= 10"))]
+            #[anneal(spec(
+                invariant::name = "value_bounded",
+                invariant::prop = self.value <= 10,
+            ))]
             pub struct Counter {
                 value: u32,
             }
 
-            #[anneal(spec(requires(name = "value_bounded", prop = "value.val <= 10")))]
+            #[anneal(spec(requires(name = "value_bounded", prop = value <= 10)))]
             pub fn make(value: u32) -> Counter {
                 Counter { value }
             }
@@ -311,13 +326,212 @@ fn test_generate_checks_struct_invariants() {
     );
     let soundness = generated_soundness(&lean);
     assert!(soundness.contains("theorem make_soundness"));
-    assert!(soundness.contains(
-        "def make_post_value_bounded (value : Std.U32) (result : Counter) : Prop :=\n  result.value.val <= 10"
-    ));
-    assert!(soundness.contains("make value ⦃ result => (make_post_value_bounded value result) ⦄"));
+    assert!(!soundness.contains("def make_post_value_bounded"));
+    assert!(soundness.contains("anneal__invariant__value_bounded"));
+    assert!(soundness.contains("make value ⦃ result => ("));
+    assert!(soundness.contains("⦃ holds => holds = true ⦄) ⦄"));
     assert!(soundness.contains("theorem touch_soundness"));
     assert!(soundness.contains("call_read counter ⦃ result => True ⦄"));
     assert!(!soundness.contains("anneal_callsite"));
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_rejects_false_rust_theorem() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project = temp_dir.path().join("false_theorem_project");
+    write_call_site_project(
+        &project,
+        r#"
+            #[anneal(theorem, proof(auto))]
+            pub fn contradiction() -> bool { false }
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    let lean = temp_dir.path().join("false_theorem_lean");
+    let output =
+        generate_project(&bin_path, &project, &temp_dir.path().join("false_theorem_llbc"), &lean);
+    assert!(
+        !output.status.success(),
+        "false Rust theorem unexpectedly passed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let soundness = generated_soundness(&lean);
+    assert!(soundness.contains("theorem contradiction_soundness"));
+    assert!(soundness.contains("contradiction ⦃ result => (result = true) ⦄"));
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_rejects_false_postcondition_despite_unrelated_true_theorem() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project = temp_dir.path().join("false_postcondition_project");
+    write_call_site_project(
+        &project,
+        r#"
+            #[anneal(theorem)]
+            pub fn unrelated_truth() -> bool { true }
+
+            #[anneal(spec(ensures(name = "wrong", prop = ret != value)))]
+            pub fn identity(value: u32) -> u32 { value }
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    let lean = temp_dir.path().join("false_postcondition_lean");
+    let output = generate_project(
+        &bin_path,
+        &project,
+        &temp_dir.path().join("false_postcondition_llbc"),
+        &lean,
+    );
+    assert!(
+        !output.status.success(),
+        "false postcondition unexpectedly passed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let soundness = generated_soundness(&lean);
+    assert!(soundness.contains("theorem unrelated_truth_soundness"));
+    assert!(soundness.contains("anneal__identity.wrong"));
+    assert!(soundness.contains("theorem identity_soundness"));
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_requires_allow_sorry_for_admitted_lean_proofs() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project = temp_dir.path().join("sorry_project");
+    write_call_site_project(
+        &project,
+        r#"
+            #[anneal(proof(lean::tactic = "exact sorryAx _ true"))]
+            pub fn identity(value: u32) -> u32 { value }
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    let rejected = generate_project(
+        &bin_path,
+        &project,
+        &temp_dir.path().join("rejected_llbc"),
+        &temp_dir.path().join("rejected_lean"),
+    );
+    assert!(!rejected.status.success(), "admitted proof passed without --allow-sorry");
+    assert!(String::from_utf8_lossy(&rejected.stderr).contains("pass `--allow-sorry` explicitly"));
+
+    let accepted = generate_project_with_allow_sorry(
+        &bin_path,
+        &project,
+        &temp_dir.path().join("accepted_llbc"),
+        &temp_dir.path().join("accepted_lean"),
+    );
+    assert!(
+        accepted.status.success(),
+        "--allow-sorry did not permit the admitted proof\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&accepted.stdout),
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_rejects_axioms_added_by_proof_metaprogramming() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project = temp_dir.path().join("metaprogrammed_axiom_project");
+    write_call_site_project(
+        &project,
+        r#"
+            #[anneal(
+                spec(ensures(name = "impossible", prop = ret != value)),
+                proof(lean::tactic = "run_tac
+  Lean.addDecl (.axiomDecl {
+    «name» := `call_site_demo.identity_soundness.forged
+    levelParams := []
+    type := .const ``False []
+    isUnsafe := false
+  })
+exact False.elim call_site_demo.identity_soundness.forged"),
+            )]
+            pub fn identity(value: u32) -> u32 { value }
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+
+    // `--allow-sorry` deliberately relaxes admissions, but must never permit a
+    // proof elaborator to extend the environment with a fresh axiom.
+    let output = generate_project_with_allow_sorry(
+        &bin_path,
+        &project,
+        &temp_dir.path().join("llbc"),
+        &temp_dir.path().join("lean"),
+    );
+    assert!(
+        !output.status.success(),
+        "metaprogrammed axiom unexpectedly passed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("Lean axiom audit failed"), "unexpected stderr: {stderr}");
+    assert!(
+        stderr.contains("rejected axiom declaration")
+            && stderr.contains("identity_soundness.forged"),
+        "unexpected stderr: {stderr}"
+    );
+}
+
+#[cfg(feature = "exocrate_tests")]
+#[test]
+fn test_generate_rejects_annotations_hidden_from_original_source_scan() {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let project = temp_dir.path().join("hidden_annotation_project");
+    write_call_site_project(
+        &project,
+        r#"
+            use anneal_macros::anneal as verify;
+
+            #[verify(theorem)]
+            pub fn aliased_contradiction() -> bool { false }
+
+            macro_rules! generated_theorem {
+                () => {
+                    #[anneal(theorem)]
+                    pub fn generated_contradiction() -> bool { false }
+                };
+            }
+            generated_theorem!();
+        "#,
+    );
+
+    let bin_path = cargo_anneal_bin_path();
+    ensure_test_toolchain(&bin_path);
+    let output = generate_project(
+        &bin_path,
+        &project,
+        &temp_dir.path().join("llbc"),
+        &temp_dir.path().join("lean"),
+    );
+    assert!(
+        !output.status.success(),
+        "source-hidden Anneal annotations unexpectedly passed\nstdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("original-source scan disagrees with rustc macro expansion"));
+    assert!(stderr.contains("aliased_contradiction"));
+    assert!(stderr.contains("generated_contradiction"));
 }
 
 #[cfg(feature = "exocrate_tests")]
@@ -329,9 +543,15 @@ fn test_generate_v2_examples_with_example_flag_in_dev_mode() {
     let bin_path = cargo_anneal_bin_path();
     ensure_test_toolchain(&bin_path);
 
-    for example in
-        ["simple", "postcondition", "function_invariant", "trait_precondition", "struct_invariant"]
-    {
+    for example in [
+        "simple",
+        "postcondition",
+        "function_invariant",
+        "trait_precondition",
+        "struct_invariant",
+        "rust_theorem",
+        "lean_escape_hatch",
+    ] {
         let output_dir = temp_dir.path().join(example).join("llbc");
         let lean_output_dir = temp_dir.path().join(example).join("lean");
         let output =
@@ -342,7 +562,35 @@ fn test_generate_v2_examples_with_example_flag_in_dev_mode() {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
-        assert!(generated_soundness(&lean_output_dir).contains("_soundness"));
+        let soundness = generated_soundness(&lean_output_dir);
+        assert!(soundness.contains("_soundness"));
+        if example == "rust_theorem" {
+            assert!(soundness.contains("theorem composed_soundness"));
+            assert!(soundness.contains("theorem later_reflexive_soundness"));
+            assert!(soundness.contains("result => (result = true)"));
+            assert!(soundness.contains("anneal__later_reflexive.self_equal"));
+            assert!(soundness.contains("anneal__later_reflexive.returns_true"));
+            assert!(soundness.contains("theorem identity_soundness"));
+            assert!(soundness.contains("anneal__identity.identity_result"));
+            assert!(
+                soundness.find("theorem pass_through_soundness").unwrap()
+                    < soundness.find("theorem composed_soundness").unwrap()
+            );
+            assert!(
+                soundness.find("theorem later_reflexive_soundness").unwrap()
+                    < soundness.find("theorem composed_soundness").unwrap()
+            );
+            assert!(
+                soundness.find("theorem composed_soundness").unwrap()
+                    < soundness.find("theorem identity_soundness").unwrap()
+            );
+        }
+        if example == "lean_escape_hatch" {
+            assert!(soundness.contains(
+                "def identity_post_lean_identity (value : Std.U32) (result : Std.U32) : Prop"
+            ));
+            assert!(soundness.contains("result.val = value.val"));
+        }
 
         if example == "simple" {
             let rerun = generate_example(
@@ -365,20 +613,28 @@ fn test_generate_v2_examples_with_example_flag_in_dev_mode() {
 #[cfg(feature = "exocrate_tests")]
 fn write_call_site_project(project_dir: &std::path::Path, lib_rs: &str) {
     std::fs::create_dir_all(project_dir.join("src")).unwrap();
+    let macro_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("anneal-macros");
     std::fs::write(
         project_dir.join("Cargo.toml"),
-        r#"
+        format!(
+            r#"
             [package]
             name = "call_site_demo"
             version = "0.1.0"
             edition = "2021"
 
+            [dependencies]
+            anneal-macros = {{ path = "{}" }}
+
             [lib]
             path = "src/lib.rs"
         "#,
+            macro_path.display()
+        ),
     )
     .unwrap();
-    std::fs::write(project_dir.join("src/lib.rs"), lib_rs).unwrap();
+    std::fs::write(project_dir.join("src/lib.rs"), format!("use anneal_macros::anneal;\n{lib_rs}"))
+        .unwrap();
 }
 
 #[cfg(feature = "exocrate_tests")]
@@ -400,6 +656,30 @@ fn generate_project(
         .arg(output_dir)
         .arg("--lean-output-dir")
         .arg(lean_output_dir)
+        .arg("--no-progress");
+    cmd.output().expect("failed to execute cargo-anneal")
+}
+
+#[cfg(feature = "exocrate_tests")]
+fn generate_project_with_allow_sorry(
+    bin_path: &std::path::Path,
+    project_dir: &std::path::Path,
+    output_dir: &std::path::Path,
+    lean_output_dir: &std::path::Path,
+) -> std::process::Output {
+    let mut cmd = cargo_anneal_command(bin_path);
+    if let Some(path) = std::env::var_os("PATH") {
+        cmd.env("PATH", path);
+    }
+    cmd.arg("generate")
+        .arg("--manifest-path")
+        .arg(project_dir.join("Cargo.toml"))
+        .arg("--lib")
+        .arg("--output-dir")
+        .arg(output_dir)
+        .arg("--lean-output-dir")
+        .arg(lean_output_dir)
+        .arg("--allow-sorry")
         .arg("--no-progress");
     cmd.output().expect("failed to execute cargo-anneal")
 }

@@ -7,7 +7,7 @@
 // This file may not be copied, modified, or distributed except according to
 // those terms.
 
-use crate::annotations::schema::AnnotationTarget;
+use crate::schema::AnnotationTarget;
 
 /// Errors produced while parsing Anneal attributes.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

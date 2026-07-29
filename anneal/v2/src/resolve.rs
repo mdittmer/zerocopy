@@ -68,7 +68,10 @@ pub struct Args {
     #[arg(long)]
     pub tests: bool,
 
-    /// Compatibility flag; omitted generated function-spec proofs use `step*`.
+    /// Permit Lean proof admissions (`sorry`, `admit`, or `sorryAx`).
+    ///
+    /// Without this explicit opt-in, generated Lean treats warnings as errors
+    /// so every declaration which semantically depends on an admission fails.
     #[arg(long)]
     pub allow_sorry: bool,
 
@@ -234,14 +237,6 @@ impl<'a> LockedRoots<'a> {
     // by downstream tools like Charon to coordinate dependency artifacts.
     pub fn cargo_target_dir(&self) -> std::path::PathBuf {
         self.roots.cargo_target_dir()
-    }
-
-    pub fn source_root(&self) -> std::path::PathBuf {
-        self.anneal_run_root.path.join("rust_source")
-    }
-
-    pub fn workspace_root(&self) -> &std::path::Path {
-        self.roots.metadata.workspace_root.as_std_path()
     }
 }
 
@@ -492,20 +487,61 @@ fn resolve_targets<'a>(
     Ok(selected_artifacts)
 }
 
-/// Scans the package graph to ensure all local dependencies are contained
-/// within the workspace root. Returns an error if an external path dependency
-/// is found.
+/// Scans the package graph to ensure ordinary local dependencies are contained
+/// within the workspace root.
+///
+/// Local packages outside the workspace are permitted when every path from a
+/// workspace member to that package enters through a procedural-macro
+/// dependency target. Procedural macros execute during compilation and are not
+/// translated by Charon, so neither they nor their dependency closure need to
+/// be available to Anneal's source analysis.
+///
+/// The distinction is edge-based rather than package-wide. A workspace member
+/// does not become exempt merely because it also owns a procedural-macro
+/// target: an ordinary target in that mixed package and its dependencies remain
+/// part of the source-analysis boundary. If the same external package is also
+/// reachable without entering through a procedural-macro dependency, it
+/// remains unsupported.
 pub fn check_for_external_deps(metadata: &cargo_metadata::Metadata) -> anyhow::Result<()> {
     log::trace!("check_for_external_deps");
     // Canonicalize workspace root to handle symlinks correctly.
     let workspace_root = std::fs::canonicalize(&metadata.workspace_root)
         .context("Failed to canonicalize workspace root")?;
 
-    for pkg in &metadata.packages {
+    let resolve =
+        metadata.resolve.as_ref().context("Cargo metadata did not include a dependency graph")?;
+    let packages = metadata
+        .packages
+        .iter()
+        .map(|package| (package.id.clone(), package))
+        .collect::<std::collections::HashMap<_, _>>();
+    let nodes = resolve
+        .nodes
+        .iter()
+        .map(|node| (node.id.clone(), node))
+        .collect::<std::collections::HashMap<_, _>>();
+
+    // The boolean records whether this path entered through a proc-macro
+    // dependency edge. Keep the two reachability states distinct: visiting a
+    // package through a proc macro must not hide a second, ordinary path to
+    // that same package.
+    let mut pending =
+        metadata.workspace_members.iter().cloned().map(|id| (id, false)).collect::<Vec<_>>();
+    let mut visited = std::collections::HashSet::new();
+
+    while let Some((package_id, through_proc_macro)) = pending.pop() {
+        let package = packages
+            .get(&package_id)
+            .with_context(|| format!("Dependency graph references unknown package {package_id}"))?;
+        if !visited.insert((package_id.clone(), through_proc_macro)) {
+            continue;
+        }
+
         // We only care about packages that are "local" (source is None).
         // If source is Some(...), it's from crates.io or git, which is fine
         // (handled by Cargo).
-        if pkg.source.is_none() {
+        if package.source.is_none() && !through_proc_macro {
+            let pkg = package;
             let pkg_path = pkg.manifest_path.as_std_path();
 
             // Canonicalize the package path for comparison.
@@ -516,14 +552,141 @@ pub fn check_for_external_deps(metadata: &cargo_metadata::Metadata) -> anyhow::R
             if !canonical_pkg_path.starts_with(&workspace_root) {
                 anyhow::bail!(
                     "Unsupported external dependency: '{}' at {:?}.\n\
-                     Anneal currently only supports verifying workspaces where all local \
-                     dependencies are contained within the workspace root.",
+                     Anneal currently only supports local dependencies outside the workspace \
+                     when they are reachable exclusively through procedural macro packages.",
                     pkg.name,
                     pkg_path
                 );
             }
         }
+
+        if let Some(node) = nodes.get(&package_id) {
+            for dependency in &node.dependencies {
+                let dependency_package = packages.get(dependency).with_context(|| {
+                    format!("Dependency graph references unknown package {dependency}")
+                })?;
+                // A Cargo dependency selects the dependency package's library
+                // target. Only crossing an edge to a proc-macro library starts
+                // the exempt closure. In particular, a workspace root that
+                // happens to contain both proc-macro and ordinary targets does
+                // not start in this state.
+                let enters_proc_macro =
+                    dependency_package.targets.iter().any(|target| target.is_proc_macro());
+                pending.push((dependency.clone(), through_proc_macro || enters_proc_macro));
+            }
+        }
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::check_for_external_deps;
+    use std::path::Path;
+
+    fn write_package(path: &Path, name: &str, manifest_tail: &str) {
+        std::fs::create_dir_all(path.join("src")).unwrap();
+        std::fs::write(
+            path.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"{name}\"\nversion = \"0.1.0\"\nedition = \"2024\"\n\
+                 {manifest_tail}\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(path.join("src/lib.rs"), "").unwrap();
+    }
+
+    fn write_workspace(path: &Path, app_dependencies: &str) {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(
+            path.join("Cargo.toml"),
+            "[workspace]\nmembers = [\"app\"]\nresolver = \"2\"\n",
+        )
+        .unwrap();
+        write_package(&path.join("app"), "app", &format!("[dependencies]\n{app_dependencies}"));
+    }
+
+    fn metadata(path: &Path) -> cargo_metadata::Metadata {
+        cargo_metadata::MetadataCommand::new()
+            .manifest_path(path.join("Cargo.toml"))
+            .exec()
+            .unwrap()
+    }
+
+    #[test]
+    fn allows_external_proc_macro_target_and_its_transitive_local_dependencies() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        write_workspace(&workspace, "external-macro = { path = \"../../external-macro\" }\n");
+        write_package(
+            &temp.path().join("external-macro"),
+            "external-macro",
+            "[lib]\nproc-macro = true\n\n\
+             [[bin]]\nname = \"macro-tool\"\npath = \"src/main.rs\"\n\n\
+             [dependencies]\n\
+             macro-helper = { path = \"../macro-helper\" }",
+        );
+        std::fs::write(temp.path().join("external-macro/src/main.rs"), "fn main() {}\n").unwrap();
+        write_package(
+            &temp.path().join("macro-helper"),
+            "macro-helper",
+            "[dependencies]\nnested-helper = { path = \"../nested-helper\" }",
+        );
+        write_package(&temp.path().join("nested-helper"), "nested-helper", "");
+
+        check_for_external_deps(&metadata(&workspace)).unwrap();
+    }
+
+    #[test]
+    fn rejects_ordinary_external_dependency_of_mixed_workspace_package() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        write_workspace(&workspace, "");
+        write_package(
+            &workspace.join("app"),
+            "app",
+            "[lib]\nproc-macro = true\n\n\
+             [[bin]]\nname = \"app-tool\"\npath = \"src/main.rs\"\n\n\
+             [dependencies]\nexternal-lib = { path = \"../../external-lib\" }",
+        );
+        std::fs::write(workspace.join("app/src/main.rs"), "fn main() {}\n").unwrap();
+        write_package(&temp.path().join("external-lib"), "external-lib", "");
+
+        let error = check_for_external_deps(&metadata(&workspace)).unwrap_err().to_string();
+        assert!(error.contains("Unsupported external dependency: 'external-lib'"));
+    }
+
+    #[test]
+    fn rejects_an_ordinary_external_path_dependency() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        write_workspace(&workspace, "external-lib = { path = \"../../external-lib\" }\n");
+        write_package(&temp.path().join("external-lib"), "external-lib", "");
+
+        let error = check_for_external_deps(&metadata(&workspace)).unwrap_err().to_string();
+        assert!(error.contains("Unsupported external dependency: 'external-lib'"));
+    }
+
+    #[test]
+    fn rejects_external_package_also_reachable_without_a_proc_macro() {
+        let temp = tempfile::tempdir().unwrap();
+        let workspace = temp.path().join("workspace");
+        write_workspace(
+            &workspace,
+            "external-macro = { path = \"../../external-macro\" }\n\
+             macro-helper = { path = \"../../macro-helper\" }\n",
+        );
+        write_package(
+            &temp.path().join("external-macro"),
+            "external-macro",
+            "[lib]\nproc-macro = true\n\n[dependencies]\n\
+             macro-helper = { path = \"../macro-helper\" }",
+        );
+        write_package(&temp.path().join("macro-helper"), "macro-helper", "");
+
+        let error = check_for_external_deps(&metadata(&workspace)).unwrap_err().to_string();
+        assert!(error.contains("Unsupported external dependency: 'macro-helper'"));
+    }
 }
