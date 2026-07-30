@@ -18,6 +18,8 @@ mod lake;
 mod resolve;
 mod scanner;
 mod setup;
+mod soundness;
+mod source_view;
 mod util;
 
 /// Anneal
@@ -77,7 +79,7 @@ pub struct GenerateArgs {
     #[arg(long)]
     pub no_progress: bool,
 
-    /// Generate Lean files and workspace metadata, but do not run Lake
+    /// Generate Lean files and metadata, but skip Lake and the semantic axiom audit
     #[arg(long)]
     pub no_lean_build: bool,
 
@@ -110,7 +112,8 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         log::warn!("No targets found to generate.");
         return Ok(());
     }
-    crate::annotation_scan::scan_workspace(&roots.metadata)?.reject_unimplemented_soundness()?;
+    let annotations = crate::annotation_scan::scan_packages(&packages)?;
+    annotations.reject_unsupported()?;
     let mut locked_roots = roots.lock_run_root()?;
     if let Some(output_dir) = args.output_dir {
         locked_roots.llbc_override = Some(output_dir);
@@ -126,10 +129,23 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &packages,
         show_progress,
     )?;
+    crate::annotation_scan::validate_expansion_markers(&locked_roots, &packages, &annotations)?;
     crate::aeneas::run_aeneas(&toolchain, &locked_roots, &packages, show_progress)?;
+    crate::soundness::write_soundness(
+        &locked_roots,
+        &packages,
+        &annotations,
+        args.resolve_args.allow_sorry,
+    )?;
     crate::lake::prepare_workspace(&toolchain, &locked_roots, &packages)?;
     if !args.no_lean_build {
-        crate::lake::build_workspace(&toolchain, &locked_roots, show_progress)?;
+        crate::lake::build_workspace(
+            &toolchain,
+            &locked_roots,
+            &packages,
+            args.resolve_args.allow_sorry,
+            show_progress,
+        )?;
     }
     Ok(())
 }
@@ -246,7 +262,7 @@ mod tests {
             let lib_var =
                 if cfg!(target_os = "macos") { "DYLD_LIBRARY_PATH" } else { "LD_LIBRARY_PATH" };
             assert_eq!(command_env(&cmd, lib_var), Some(toolchain.rust_lib().as_os_str()));
-            assert!(command_env(&cmd, "HOME").is_none());
+            assert!(command_env(&cmd, "HOME").is_some());
         }
 
         #[test]

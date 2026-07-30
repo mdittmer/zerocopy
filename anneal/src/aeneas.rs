@@ -41,8 +41,8 @@ pub fn run_aeneas(
             pb
         });
 
-        let llbc_path = artifact.llbc_path(roots);
-        let lean_dir = artifact.lean_dir_path(roots);
+        let llbc_path = crate::util::absolute_path(artifact.llbc_path(roots))?;
+        let lean_dir = crate::util::absolute_path(artifact.lean_dir_path(roots))?;
         if lean_dir.exists() {
             std::fs::remove_dir_all(&lean_dir)
                 .with_context(|| format!("Failed to clear {}", lean_dir.display()))?;

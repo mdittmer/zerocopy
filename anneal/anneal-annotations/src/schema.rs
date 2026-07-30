@@ -152,7 +152,12 @@ const PROOF_LEAN_CHILDREN: &[SchemaNode] = &[
 ];
 
 const PROOF_CHILDREN: &[SchemaNode] = &[
-    SchemaNode { name: "lean", default_child: None, value: None, children: PROOF_LEAN_CHILDREN },
+    SchemaNode {
+        name: "lean",
+        default_child: Some("tactic"),
+        value: None,
+        children: PROOF_LEAN_CHILDREN,
+    },
     SchemaNode {
         name: "domain",
         default_child: None,
@@ -174,7 +179,12 @@ const ANNEAL_CHILDREN: &[SchemaNode] = &[
         value: None,
         children: SPEC_CHILDREN,
     },
-    SchemaNode { name: "proof", default_child: None, value: None, children: PROOF_CHILDREN },
+    SchemaNode {
+        name: "proof",
+        default_child: Some("lean"),
+        value: None,
+        children: PROOF_CHILDREN,
+    },
 ];
 
 pub(super) const ANNEAL_SCHEMA: SchemaNode =

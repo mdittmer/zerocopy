@@ -37,6 +37,8 @@ pub fn run_charon(
 ) -> anyhow::Result<()> {
     let llbc_root = roots.llbc_root();
     std::fs::create_dir_all(&llbc_root).context("Failed to create LLBC output directory")?;
+    let source_view = crate::source_view::SourceView::prepare(roots, packages)
+        .context("Failed to prepare Charon Rust source view")?;
 
     // Global print mutex to prevent interleaved printing of consolidated artifact buffers.
     let print_mutex = std::sync::Arc::new(std::sync::Mutex::new(()));
@@ -72,8 +74,17 @@ pub fn run_charon(
         cmd.arg("cargo");
         cmd.arg("--preset=aeneas");
 
-        let llbc_path = artifact.llbc_path(roots);
-        cmd.arg("--dest-file").arg(llbc_path);
+        let llbc_path = crate::util::absolute_path(artifact.llbc_path(roots))?;
+        match std::fs::remove_file(&llbc_path) {
+            Ok(()) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+            Err(err) => {
+                return Err(err).with_context(|| {
+                    format!("Failed to remove stale LLBC artifact {}", llbc_path.display())
+                });
+            }
+        }
+        cmd.arg("--dest-file").arg(&llbc_path);
 
         // Fail fast on errors: if Charon (or `rustc`) encounters a compilation error or
         // translation failure (e.g., an unsupported Rust feature), it will terminate
@@ -86,7 +97,7 @@ pub fn run_charon(
         // Ensure cargo emits json msgs which charon-driver natively generates.
         cmd.arg("--message-format=json");
 
-        cmd.arg("--manifest-path").arg(&artifact.manifest_path);
+        cmd.arg("--manifest-path").arg(source_view.manifest_path(artifact).as_ref());
 
         use crate::resolve::AnnealTargetKind::*;
         match artifact.target_kind {
@@ -190,6 +201,12 @@ pub fn run_charon(
                 eprintln!("{}", line);
             }
             anyhow::bail!("Charon failed with status: {}", res.status);
+        }
+        if !llbc_path.is_file() {
+            anyhow::bail!(
+                "Charon succeeded without producing the requested LLBC artifact {}",
+                llbc_path.display()
+            );
         }
 
         Ok(())
@@ -525,6 +542,207 @@ pub fn max_level() -> usize {
         // 9. Verify .llbc file exists.
         let llbc_path = packages[0].llbc_path(&locked_roots);
         assert!(llbc_path.exists(), "llbc file not found at {:?}", llbc_path);
+    }
+
+    /// Locks down the source provenance that Rust-authored Anneal conditions rely on.
+    ///
+    /// In particular, this catches replacing direct token interpolation in `anneal-macros`
+    /// with stringify/reparse or routing Charon through a pretty-printed source copy.
+    #[cfg(feature = "exocrate_tests")]
+    #[test]
+    fn test_proc_macro_rust_prop_preserves_original_span() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let project_dir = temp_dir.path().join("span_provenance_fixture");
+        fs::create_dir_all(project_dir.join("src")).unwrap();
+
+        let macro_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("anneal-macros")
+            .canonicalize()
+            .unwrap();
+        let macro_dir = macro_dir
+            .to_str()
+            .expect("anneal-macros path must be UTF-8")
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        fs::write(
+            project_dir.join("Cargo.toml"),
+            format!(
+                r#"[package]
+name = "span_provenance_fixture"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anneal-macros = {{ path = "{macro_dir}" }}
+
+[lib]
+path = "src/lib.rs"
+
+[workspace]
+"#
+            ),
+        )
+        .unwrap();
+
+        // The non-ASCII `é` appears before the proposition's first token on the same
+        // line. This makes a byte offset differ from a character/display column and
+        // guards both the stored file contents and our interpretation of Charon's Loc.
+        let lib_rs = r#"use anneal_macros::anneal;
+
+#[anneal(spec(
+    requires(
+        name = "macro_span_probe",
+        prop =
+            /* café */ value
+                == 0x5A17_u32,
+    ),
+))]
+pub fn identity(value: u32) -> u32 {
+    value
+}
+"#;
+        fs::write(project_dir.join("src/lib.rs"), lib_rs).unwrap();
+
+        let llbc_path = project_dir.join("span_provenance_fixture.llbc");
+        let toolchain = resolve_test_toolchain();
+        let mut cmd = toolchain.command(crate::setup::Tool::Charon).unwrap();
+        cmd.arg("cargo")
+            .arg("--preset=aeneas")
+            .arg("--dest-file")
+            .arg(&llbc_path)
+            .arg("--abort-on-error")
+            .arg("--")
+            .arg("--offline")
+            .arg("--manifest-path")
+            .arg(project_dir.join("Cargo.toml"))
+            .arg("--lib")
+            .env("CARGO_TARGET_DIR", project_dir.join("target"));
+        let output = cmd.output().unwrap();
+        assert!(
+            output.status.success(),
+            "Charon failed:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        let file = std::fs::File::open(&llbc_path).unwrap();
+        let crate_data: charon_lib::export::CrateData = serde_json::from_reader(file).unwrap();
+        let source_file = crate_data
+            .translated
+            .files
+            .iter()
+            .find(|file| {
+                file.crate_name == "span_provenance_fixture"
+                    && matches!(
+                        &file.name,
+                        charon_lib::ast::FileName::Local(path)
+                            if path.ends_with(std::path::Path::new("src/lib.rs"))
+                    )
+            })
+            .expect("fixture src/lib.rs was not recorded by Charon");
+        let contents = source_file.contents.as_deref().expect("fixture source contents are absent");
+        assert_eq!(contents, lib_rs, "Charon must retain the pristine, pre-expansion Rust source");
+
+        let helper = crate_data
+            .translated
+            .fun_decls
+            .iter()
+            .find(|fun| {
+                let idents = fun
+                    .item_meta
+                    .name
+                    .name
+                    .iter()
+                    .filter_map(|elem| match elem {
+                        charon_lib::ast::PathElem::Ident(ident, _) => Some(ident.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+                idents.ends_with(&["anneal__identity", "macro_span_probe"])
+            })
+            .expect("generated Rust condition helper was not translated");
+        let charon_lib::ast::Body::Structured(body) = &helper.body else {
+            panic!("generated Rust condition helper did not have a structured body");
+        };
+
+        let proposition = "value\n                == 0x5A17_u32";
+        let prop_start = lib_rs.find(proposition).expect("proposition missing from fixture");
+        let prop_end = prop_start + proposition.len();
+        assert!(lib_rs[..prop_start].contains("café"));
+        assert_ne!(
+            lib_rs[..prop_start].len(),
+            lib_rs[..prop_start].chars().count(),
+            "fixture must contain multibyte source text before the proposition",
+        );
+
+        fn loc_at(source: &str, byte: usize) -> charon_lib::ast::Loc {
+            let before = &source[..byte];
+            let line_start = before.rfind('\n').map_or(0, |newline| newline + 1);
+            charon_lib::ast::Loc {
+                line: before.bytes().filter(|byte| *byte == b'\n').count() + 1,
+                // This fixture uses no tabs and only width-one Unicode characters.
+                col: source[line_start..byte].chars().count(),
+            }
+        }
+
+        let expected_span = charon_lib::ast::SpanData {
+            file_id: source_file.id,
+            beg: loc_at(lib_rs, prop_start),
+            end: loc_at(lib_rs, prop_end),
+        };
+        let attribute_start = lib_rs.find("#[anneal").expect("attribute missing from fixture");
+        let attribute_end = attribute_start
+            + lib_rs[attribute_start..]
+                .find("))]")
+                .expect("attribute terminator missing from fixture")
+            + 3;
+        let expected_attribute_span = charon_lib::ast::SpanData {
+            file_id: source_file.id,
+            beg: loc_at(lib_rs, attribute_start),
+            end: loc_at(lib_rs, attribute_end),
+        };
+        assert_eq!(
+            helper.item_meta.span.data, expected_attribute_span,
+            "generated helper scaffolding should fall back to the complete attribute invocation",
+        );
+        assert_eq!(
+            helper.item_meta.span.generated_from_span, None,
+            "the pinned Charon revision should not require a secondary scaffolding origin",
+        );
+        let statement = body
+            .body
+            .statements
+            .iter()
+            .find(|statement| statement.span.data == expected_span)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no helper statement had the original proposition span {expected_span:?}; \
+                     observed spans: {:#?}",
+                    body.body.statements.iter().map(|statement| statement.span).collect::<Vec<_>>(),
+                )
+            });
+        assert_eq!(
+            statement.span.generated_from_span, None,
+            "the pinned Charon revision should expose the interpolated token span directly",
+        );
+
+        fn byte_at_loc(source: &str, loc: charon_lib::ast::Loc) -> usize {
+            let mut line_start = 0;
+            for _ in 1..loc.line {
+                line_start +=
+                    source[line_start..].find('\n').expect("span line must exist in source") + 1;
+            }
+            line_start
+                + source[line_start..]
+                    .char_indices()
+                    .nth(loc.col)
+                    .map_or(source[line_start..].len(), |(byte, _)| byte)
+        }
+
+        let mapped_start = byte_at_loc(contents, statement.span.data.beg);
+        let mapped_end = byte_at_loc(contents, statement.span.data.end);
+        assert_eq!(&contents[mapped_start..mapped_end], proposition);
+        assert_eq!((mapped_start, mapped_end), (prop_start, prop_end));
     }
 
     #[cfg(feature = "exocrate_tests")]

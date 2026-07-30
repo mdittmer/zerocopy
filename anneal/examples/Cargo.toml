@@ -1,0 +1,13 @@
+[package]
+name = "anneal-v2-examples"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+anneal-macros = { path = "../anneal-macros" }
+
+[workspace]
+
+[lib]
+path = "src/lib.rs"

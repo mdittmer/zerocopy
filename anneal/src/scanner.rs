@@ -20,6 +20,8 @@ pub struct AnnealArtifact {
     pub target_kind: crate::resolve::AnnealTargetKind,
     /// The path to the crate's `Cargo.toml`.
     pub manifest_path: std::path::PathBuf,
+    /// The Rust source file for this target, when available.
+    pub src_path: Option<std::path::PathBuf>,
 }
 
 impl From<&crate::resolve::AnnealTarget> for AnnealArtifact {
@@ -28,20 +30,35 @@ impl From<&crate::resolve::AnnealTarget> for AnnealArtifact {
             name: target.name.clone(),
             target_kind: target.kind,
             manifest_path: target.manifest_path.clone(),
+            src_path: Some(target.src_path.clone()),
         }
     }
 }
 
 impl From<&cargo_metadata::Package> for AnnealArtifact {
     fn from(package: &cargo_metadata::Package) -> Self {
+        let library_target = package.targets.iter().find_map(|target| {
+            target
+                .kind
+                .iter()
+                .find_map(|kind| crate::resolve::AnnealTargetKind::try_from(kind).ok())
+                .filter(crate::resolve::AnnealTargetKind::is_lib)
+                .map(|kind| (target, kind))
+        });
+        let target_kind =
+            library_target.map(|(_, kind)| kind).unwrap_or(crate::resolve::AnnealTargetKind::Lib);
+        let target_name = library_target
+            .map(|(target, _)| target.name.clone())
+            .unwrap_or_else(|| package.name.to_string());
         Self {
             name: crate::resolve::AnnealTargetName {
                 package_name: package.name.clone(),
-                target_name: package.name.to_string(),
-                kind: crate::resolve::AnnealTargetKind::Lib,
+                target_name,
+                kind: target_kind,
             },
-            target_kind: crate::resolve::AnnealTargetKind::Lib,
+            target_kind,
             manifest_path: package.manifest_path.as_std_path().to_owned(),
+            src_path: library_target.map(|(target, _)| target.src_path.as_std_path().to_owned()),
         }
     }
 }
@@ -106,7 +123,7 @@ impl AnnealArtifact {
         format!("{}.llbc", self.artifact_slug())
     }
 
-    /// Returns the absolute path to the .llbc file.
+    /// Returns the configured path to the .llbc file.
     ///
     /// This method requires [`crate::resolve::LockedRoots`] to ensure that the caller holds the
     /// build lock before accessing the build artifact path.

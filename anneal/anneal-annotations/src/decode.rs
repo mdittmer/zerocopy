@@ -11,8 +11,8 @@ use proc_macro2::TokenStream;
 use quote::ToTokens as _;
 use syn::{Expr, ExprLit, Lit};
 
-use crate::annotations::{
-    Attribute, AttributeData, Attributes, LeanProof, LeanProp, Proof, Prop, Spec,
+use crate::{
+    Attribute, AttributeData, Attributes, LeanProof, LeanProp, Proof, Prop, RustProp, Spec,
     error::{AnnotationError, Result},
     parse::{MatchedEntry, MatchedPayload, path_string},
     schema::{AnnotationTarget, ValueKind},
@@ -22,10 +22,7 @@ pub(crate) fn parse_attributes(
     attrs: &[syn::Attribute],
     target: AnnotationTarget,
 ) -> Result<Attributes> {
-    crate::annotations::parse::parse_matches(attrs, target)?
-        .into_iter()
-        .map(attribute_from_match)
-        .collect()
+    crate::parse::parse_matches(attrs, target)?.into_iter().map(attribute_from_match).collect()
 }
 
 fn attribute_from_match(matched: MatchedEntry<'_>) -> Result<Attribute> {
@@ -45,10 +42,14 @@ fn attribute_from_match(matched: MatchedEntry<'_>) -> Result<Attribute> {
 
 fn apply_match(builder: &mut AttributeBuilder, matched: MatchedEntry<'_>) -> Result<()> {
     match matched.payload {
+        MatchedPayload::Flag => Err(AnnotationError::UnsupportedFlag(path_string(&matched.path))),
         MatchedPayload::Value(tokens) => {
-            apply_value(builder, &matched.path, matched.node.value.map(|value| value.kind), tokens)
+            apply_value(builder, &matched.path, matched.node.value.map(|v| v.kind), tokens)
         }
         MatchedPayload::List(children) => {
+            if children.is_empty() {
+                return Err(AnnotationError::NonLeafPath(path_string(&matched.path)));
+            }
             if matches!(matched.path.as_slice(), ["spec"]) {
                 return apply_spec_list(builder, children);
             }
@@ -113,12 +114,15 @@ fn apply_spec_prop_child(
     }
 
     let parts = pending.entry(*field).or_default();
-    match (*leaf, child.node.value.map(|value| value.kind), child.payload) {
+    match (*leaf, child.node.value.map(|v| v.kind), child.payload) {
         ("name", Some(ValueKind::String), MatchedPayload::Value(tokens)) => {
             set_once(&mut parts.name, string_value(tokens)?, &child.path)
         }
         ("prop", Some(ValueKind::Prop), MatchedPayload::Value(tokens)) => {
             set_once(&mut parts.prop, prop_scalar_value(tokens)?, &child.path)
+        }
+        (_, _, MatchedPayload::Flag) => {
+            Err(AnnotationError::UnsupportedFlag(path_string(&child.path)))
         }
         (_, _, MatchedPayload::List(_)) => {
             Err(AnnotationError::NonLeafPath(path_string(&child.path)))
@@ -174,11 +178,9 @@ fn flush_pending_prop(
     }
 
     let prop_path = format!("spec::{field}::prop");
-    let Prop::Lean(mut lean) = required(parts.prop, &prop_path)?;
-    if let Some(name) = parts.name {
-        lean.name = Some(name);
-    }
-    push_spec_prop(builder, &["spec", field], Prop::Lean(lean))
+    let mut prop = required(parts.prop, &prop_path)?;
+    set_prop_name(&mut prop, parts.name);
+    push_spec_prop(builder, &["spec", field], prop)
 }
 
 struct Domains {
@@ -193,27 +195,18 @@ impl Default for Domains {
 }
 
 impl Domains {
-    fn make_explicit(&mut self) {
+    fn extend(&mut self, domains: impl IntoIterator<Item = String>) {
         if !self.explicit {
             self.values.clear();
             self.explicit = true;
         }
-    }
-
-    fn push(&mut self, domain: String) {
-        self.make_explicit();
-        self.values.push(domain);
-    }
-
-    fn extend(&mut self, domains: impl IntoIterator<Item = String>) {
-        self.make_explicit();
         self.values.extend(domains);
     }
 }
 
 enum AttributeBuilder {
     Spec { spec: Spec, domains: Domains },
-    Proof { proof: Option<LeanProof>, domains: Domains },
+    Proof { proof: Option<Proof>, domains: Domains },
 }
 
 impl AttributeBuilder {
@@ -223,10 +216,7 @@ impl AttributeBuilder {
                 Ok(Attribute { data: AttributeData::Spec(spec), domains: domains.values })
             }
             AttributeBuilder::Proof { proof, domains } => Ok(Attribute {
-                data: AttributeData::Proof(Proof::Lean(required(
-                    proof,
-                    "proof::lean::tactic or proof::lean::term",
-                )?)),
+                data: AttributeData::Proof(required(proof, "proof")?),
                 domains: domains.values,
             }),
         }
@@ -250,18 +240,17 @@ fn apply_value(
             push_spec_prop(builder, path, prop_scalar_value(tokens)?)
         }
         (_, Some(kind @ (ValueKind::Domain | ValueKind::Domains))) => {
-            domains_builder(builder).extend(domain_values(kind, tokens)?);
-            Ok(())
+            extend_domains(builder, domain_values(kind, tokens)?)
         }
         ([proof, lean, mode], Some(ValueKind::LeanProofTactic))
             if *proof == "proof" && *lean == "lean" && *mode == "tactic" =>
         {
-            set_proof(builder, LeanProof::TacticProof(string_value(tokens)?), path)
+            set_proof(builder, Proof::Lean(LeanProof::TacticProof(string_value(tokens)?)), path)
         }
         ([proof, lean, mode], Some(ValueKind::LeanProofTerm))
             if *proof == "proof" && *lean == "lean" && *mode == "term" =>
         {
-            set_proof(builder, LeanProof::TermProof(string_value(tokens)?), path)
+            set_proof(builder, Proof::Lean(LeanProof::TermProof(string_value(tokens)?)), path)
         }
         _ => Err(AnnotationError::UnknownPath(path_string(path))),
     }
@@ -280,11 +269,12 @@ fn domains_builder(builder: &mut AttributeBuilder) -> &mut Domains {
     }
 }
 
-fn set_proof(
-    builder: &mut AttributeBuilder,
-    value: LeanProof,
-    path: &[&'static str],
-) -> Result<()> {
+fn extend_domains(builder: &mut AttributeBuilder, domains: Vec<String>) -> Result<()> {
+    domains_builder(builder).extend(domains);
+    Ok(())
+}
+
+fn set_proof(builder: &mut AttributeBuilder, value: Proof, path: &[&'static str]) -> Result<()> {
     match builder {
         AttributeBuilder::Proof { proof, .. } => set_once(proof, value, path),
         _ => Err(AnnotationError::UnknownPath(path_string(path))),
@@ -331,12 +321,15 @@ fn prop_from_children(path: &[&'static str], children: Vec<MatchedEntry<'_>>) ->
     let mut prop = None;
 
     for child in children {
-        match (child.path.as_slice(), child.node.value.map(|value| value.kind), child.payload) {
+        match (child.path.as_slice(), child.node.value.map(|v| v.kind), child.payload) {
             ([.., "name"], Some(ValueKind::String), MatchedPayload::Value(tokens)) => {
                 set_once(&mut name, string_value(tokens)?, &child.path)?;
             }
             ([.., "prop"], Some(ValueKind::Prop), MatchedPayload::Value(tokens)) => {
                 set_once(&mut prop, prop_scalar_value(tokens)?, &child.path)?;
+            }
+            (_, _, MatchedPayload::Flag) => {
+                return Err(AnnotationError::UnsupportedFlag(path_string(&child.path)));
             }
             (_, _, MatchedPayload::List(_)) => {
                 return Err(AnnotationError::NonLeafPath(path_string(&child.path)));
@@ -346,11 +339,16 @@ fn prop_from_children(path: &[&'static str], children: Vec<MatchedEntry<'_>>) ->
     }
 
     let prop_path = format!("{}::prop", path_string(path));
-    let Prop::Lean(mut lean) = required(prop, &prop_path)?;
-    if let Some(name) = name {
-        lean.name = Some(name);
+    let mut prop = required(prop, &prop_path)?;
+    set_prop_name(&mut prop, name);
+    Ok(prop)
+}
+
+fn set_prop_name(prop: &mut Prop, name: Option<String>) {
+    match prop {
+        Prop::Rust(rust) => rust.name = name,
+        Prop::Lean(lean) => lean.name = name,
     }
-    Ok(Prop::Lean(lean))
 }
 
 fn set_once<T>(slot: &mut Option<T>, value: T, path: &[&'static str]) -> Result<()> {
@@ -362,14 +360,13 @@ fn set_once<T>(slot: &mut Option<T>, value: T, path: &[&'static str]) -> Result<
 }
 
 fn prop_scalar_value(tokens: TokenStream) -> Result<Prop> {
-    let expr = expr_value(tokens)?;
-    let Expr::Lit(ExprLit { lit: Lit::Str(value), .. }) = &expr else {
-        return Err(AnnotationError::UnsupportedValue(format!(
-            "Rust-language propositions are not implemented yet; write Lean propositions as string literals, got `{}`",
-            quote_expr(&expr)
-        )));
-    };
-    Ok(Prop::Lean(LeanProp::from(value.value())))
+    let expr = expr_value(tokens.clone())?;
+    match &expr {
+        Expr::Lit(ExprLit { lit: Lit::Str(value), .. }) => {
+            Ok(Prop::Lean(LeanProp::from(value.value())))
+        }
+        _ => Ok(Prop::Rust(RustProp::new(tokens))),
+    }
 }
 
 fn domain_values(kind: ValueKind, tokens: TokenStream) -> Result<Vec<String>> {

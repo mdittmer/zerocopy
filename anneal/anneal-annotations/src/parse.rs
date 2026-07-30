@@ -8,12 +8,13 @@
 // those terms.
 
 use proc_macro2::{TokenStream, TokenTree};
+use quote::ToTokens as _;
 use syn::{
     Meta, Path, Token, parenthesized,
     parse::{Parse, ParseStream, Parser as _},
 };
 
-use crate::annotations::{
+use crate::{
     error::{AnnotationError, Result},
     schema::{ANNEAL_SCHEMA, AnnotationTarget, SchemaNode},
 };
@@ -27,6 +28,7 @@ pub(super) struct MatchedEntry<'a> {
 
 #[derive(Clone, Debug)]
 pub(super) enum MatchedPayload<'a> {
+    Flag,
     Value(TokenStream),
     List(Vec<MatchedEntry<'a>>),
 }
@@ -67,7 +69,7 @@ fn parse_raw_entry(input: ParseStream<'_>) -> syn::Result<RawEntry> {
 
     let kind = if input.peek(Token![=]) {
         input.parse::<Token![=]>()?;
-        RawEntryKind::Value(parse_value_tokens(input)?)
+        RawEntryKind::Value(parse_value_tokens(input, &path)?)
     } else if input.peek(syn::token::Paren) {
         let content;
         parenthesized!(content in input);
@@ -79,7 +81,13 @@ fn parse_raw_entry(input: ParseStream<'_>) -> syn::Result<RawEntry> {
     Ok(RawEntry { path, kind })
 }
 
-fn parse_value_tokens(input: ParseStream<'_>) -> syn::Result<TokenStream> {
+fn parse_value_tokens(input: ParseStream<'_>, path: &[String]) -> syn::Result<TokenStream> {
+    if path.last().is_some_and(|segment| {
+        matches!(segment.as_str(), "spec" | "requires" | "ensures" | "invariant" | "prop")
+    }) {
+        return input.parse::<syn::Expr>().map(|expr| expr.into_token_stream());
+    }
+
     let mut tokens = TokenStream::new();
     while !input.is_empty() && !input.peek(Token![,]) {
         tokens.extend(std::iter::once(input.parse::<TokenTree>()?));
@@ -110,12 +118,22 @@ pub(super) fn parse_matches(
     Ok(out)
 }
 
-fn is_anneal_attribute(meta: &Meta) -> Result<bool> {
+pub(crate) fn is_anneal_attribute(meta: &Meta) -> Result<bool> {
     let path = path_segments(meta.path())?;
-    match path.as_slice() {
-        [anneal] if anneal == "anneal" => Ok(true),
-        [anneal, ..] if anneal == "anneal" => Err(AnnotationError::UnknownPath(path.join("::"))),
-        _ => Ok(false),
+    Ok(path.first().is_some_and(|segment| segment == "anneal")
+        || matches!(path.as_slice(), [package, macro_name, ..]
+            if package == "anneal_macros" && macro_name == "anneal"))
+}
+
+fn anneal_path_prefix_len(path: &[String]) -> Option<usize> {
+    if matches!(path, [anneal] if anneal == "anneal") {
+        Some(1)
+    } else if matches!(path, [package, macro_name]
+        if package == "anneal_macros" && macro_name == "anneal")
+    {
+        Some(2)
+    } else {
+        None
     }
 }
 
@@ -143,27 +161,21 @@ fn parse_anneal_attribute(
     meta: &Meta,
     target: AnnotationTarget,
 ) -> Result<Vec<MatchedEntry<'static>>> {
-    let mut path = path_segments(meta.path())?;
-    if path.first().map(String::as_str) != Some("anneal") {
+    let path = path_segments(meta.path())?;
+    if anneal_path_prefix_len(&path).is_none() {
         return Err(AnnotationError::UnknownPath(path.join("::")));
     }
-    path.remove(0);
-
-    if path.is_empty() {
-        let Meta::List(list) = meta else {
-            return Err(AnnotationError::NonLeafPath("anneal".into()));
-        };
-        let entries = parse_entries(list.tokens.clone())?;
-        if entries.is_empty() {
-            return Err(AnnotationError::NonLeafPath("anneal".into()));
-        }
-        entries
-            .into_iter()
-            .map(|entry| match_entry(&ANNEAL_SCHEMA, Vec::new(), entry, target))
-            .collect()
-    } else {
-        Err(AnnotationError::UnknownPath(path.join("::")))
+    let Meta::List(list) = meta else {
+        return Err(AnnotationError::NonLeafPath("anneal".into()));
+    };
+    let entries = parse_entries(list.tokens.clone())?;
+    if entries.is_empty() {
+        return Err(AnnotationError::NonLeafPath("anneal".into()));
     }
+    entries
+        .into_iter()
+        .map(|entry| match_entry(&ANNEAL_SCHEMA, Vec::new(), entry, target))
+        .collect()
 }
 
 fn match_entry<'a>(
@@ -174,7 +186,9 @@ fn match_entry<'a>(
 ) -> Result<MatchedEntry<'a>> {
     match entry.kind {
         RawEntryKind::Flag => {
-            Err(AnnotationError::UnsupportedFlag(path_with_prefix(&prefix, &entry.path)))
+            let (node, path) =
+                resolve_for_capability(context, prefix, &entry.path, Capability::Flag, target)?;
+            Ok(MatchedEntry { node, path, payload: MatchedPayload::Flag })
         }
         RawEntryKind::Value(tokens) => {
             let (node, path) =
@@ -184,11 +198,7 @@ fn match_entry<'a>(
         RawEntryKind::List(tokens) => {
             let (node, path) =
                 resolve_for_capability(context, prefix, &entry.path, Capability::List, target)?;
-            let entries = parse_entries(tokens)?;
-            if entries.is_empty() {
-                return Err(AnnotationError::NonLeafPath(path_string(&path)));
-            }
-            let children = entries
+            let children = parse_entries(tokens)?
                 .into_iter()
                 .map(|entry| match_entry(node, path.clone(), entry, target))
                 .collect::<Result<Vec<_>>>()?;
@@ -199,6 +209,7 @@ fn match_entry<'a>(
 
 #[derive(Clone, Copy)]
 enum Capability {
+    Flag,
     Value,
     List,
 }
@@ -347,16 +358,23 @@ fn default_child(node: &SchemaNode) -> Option<&SchemaNode> {
 
 fn supports(node: &SchemaNode, capability: Capability, target: AnnotationTarget) -> bool {
     match capability {
+        Capability::Flag => false,
         Capability::Value => node.value.is_some_and(|value| value.supports(target)),
-        Capability::List => !node.children.is_empty(),
+        Capability::List => !node.children.is_empty() && node_supports_target(node, target),
     }
 }
 
 fn supports_wrong_target(node: &SchemaNode, capability: Capability) -> bool {
     match capability {
+        Capability::Flag => false,
         Capability::Value => node.value.is_some(),
-        Capability::List => false,
+        Capability::List => !node.children.is_empty(),
     }
+}
+
+fn node_supports_target(node: &SchemaNode, target: AnnotationTarget) -> bool {
+    node.value.is_some_and(|value| value.supports(target))
+        || node.children.iter().any(|child| node_supports_target(child, target))
 }
 
 fn path_segments(path: &Path) -> Result<Vec<String>> {
