@@ -4,9 +4,14 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+    charon.url = "github:aeneasverif/charon/527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59";
+    charon.inputs.nixpkgs.follows = "nixpkgs";
+    charon.inputs.flake-utils.follows = "flake-utils";
+    aeneas.url = "github:mdittmer/aeneas/ub__get_unchecked";
+    aeneas.inputs.charon.follows = "charon";
   };
 
-  outputs = { self, nixpkgs, flake-utils, ... }:
+  outputs = { self, nixpkgs, flake-utils, charon, aeneas, ... }:
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
@@ -33,25 +38,25 @@
                        else if system == "aarch64-darwin" then "macos-aarch64"
                        else throw "Unsupported system: ${system}";
 
-        aeneasSha256 = if system == "x86_64-linux" then "sha256-APuO9CfU0G3KvZD1GWJm4HcxrfKnRmlkzm9PbR6MvBE="
-                       else if system == "aarch64-linux" then "sha256-JUAsTLy32i0zfLFoZjVCvJx1rpsQ0tJwj1KJ6MqdGQI="
-                       else if system == "x86_64-darwin" then "sha256-uiXuhXp2+o9MECL23/QHLJoBAHRT1nxhz7qhqhwD4xc="
-                       else if system == "aarch64-darwin" then "sha256-dveLZF4zjsfokynwrSJ5KZf0K9m16xRkOsMq3iJO62E="
+        aeneasSha256 = if system == "x86_64-linux" then "sha256-oocAu6vwTuoV1IbRglPMBNKz937EA6R5kMXdI0wFsGg="
+                       else if system == "aarch64-linux" then "sha256-sbnkItK/LD4bh4ilByXutIiHe7DBVKmJq8s9vIHuGVs="
+                       else if system == "x86_64-darwin" then "sha256-R1o8rLG3mw14eguI6AuGNUnBCVHxReOBeBYTNkJACFw="
+                       else if system == "aarch64-darwin" then "sha256-JDh2CHqOmlWhuagOgWLRQYGgphZNevEeUhPGT5CRzJs="
                        else throw "Unsupported system: ${system}";
 
-        rustDate = "2026-05-31";
-        leanVersion = "v4.30.0-rc2";
+        rustDate = "2026-06-01";
+        leanVersion = "v4.31.0";
 
-        rustToolchainSha256 = if system == "x86_64-linux" then "sha256-MmvOgC3shIOVMWT1MTRajw8JuLwRk/P3LsmGVslNGKw="
-                              else if system == "aarch64-linux" then "sha256-gWFajI7TJyjslQLZm4VWBBsKA6nYe1lNQwrgUp2hwSA="
-                              else if system == "x86_64-darwin" then "sha256-dBLHRLo3omD7KRq0D8lzg6XiQfDKWOMD6YTrLQhEneo="
-                              else if system == "aarch64-darwin" then "sha256-X7ndqbjsmnjL6KZzNCxkVFJPzAsAjUqerD/wc1rxK5E="
+        rustToolchainSha256 = if system == "x86_64-linux" then "sha256-xb/VgFnRJJLaTGPOXyJSGiTIKnPbPBxhydFNj8TFxXo="
+                              else if system == "aarch64-linux" then "sha256-sNaSWY8qa/gFqa+7ZjVe+Egy+LpssB0JOrTwqz8gPO8="
+                              else if system == "x86_64-darwin" then "sha256-qQ6HNBY8hkm/1xCYYXkLQISyrxCmLEPvhdO1Csy7BHM="
+                              else if system == "aarch64-darwin" then "sha256-87C+22fXsKNzt1oiwCtNpDsj1OTBUwb1MB/3Q4RXnyg="
                               else throw "Unsupported system: ${system}";
 
-        leanToolchainSha256 = if system == "x86_64-linux" then "sha256-o47cQjSLK5YL8YZ2raaj+mGAvvO+dIDfVeP2L+WoyMs="
-                              else if system == "aarch64-linux" then "sha256-IrEGcTEeI1q0/7tLtMiiKPcW05JvaU8kNY6y5eprYg4="
-                              else if system == "x86_64-darwin" then "sha256-DDPmVkXjSLDr21LXcdvNkmGjD2v+sbUyY+REr3uylwI="
-                              else if system == "aarch64-darwin" then "sha256-dpUCCLkhoGDKkDKPZxr7WrmkifxHi4MWLpD148z2vhg="
+        leanToolchainSha256 = if system == "x86_64-linux" then "sha256-B5ZDv1AMKN6M6zVLSL6nhDJ64R7ZxupuJvxfAbTn5hw="
+                              else if system == "aarch64-linux" then "sha256-HNVY4B6PIaGzfk5wURbNYGm/v5t7ZLz+uzHExKnLM6A="
+                              else if system == "x86_64-darwin" then "sha256-ntsUnj7dQ0h+zSg0Ez48N91x8sCu/bu/uuN5VrVecX0="
+                              else if system == "aarch64-darwin" then "sha256-DqRuJqtagp5LLhGw0sD7fuDzqOB93cbIdJOK70GoXmE="
                               else throw "Unsupported system: ${system}";
 
         leantarPlatform = if system == "x86_64-linux" then "x86_64-unknown-linux-musl"
@@ -66,7 +71,7 @@
                         else if system == "aarch64-darwin" then "sha256-tbWQ0vhC4jWZPsdW09vWCKE8iP1U02p7K2WjY7LuXjU="
                         else throw "Unsupported system: ${system}";
 
-        mathlibCacheDownloadSha256 = if system == "x86_64-linux" then "sha256-n67tKjzZm5LsDU1Dl9kaOFKrQw+8YE201F0toYu1C3s="
+        mathlibCacheDownloadSha256 = if system == "x86_64-linux" then "sha256-N8PU7D0nqg81tHD8IggrHc4m6Vp+IF9wINhrVgxnvj8="
                                      else if system == "aarch64-linux" then "sha256-9Yj5BAv6V5BTLd/nOWzIuqTDJPKwqR28bg7m9+46K98="
                                      else if system == "x86_64-darwin" then "sha256-DBdUmPfheeLTVwaVUzkB541Y9CWSQN6gmxBnJ3oxL4c="
                                      else if system == "aarch64-darwin" then "sha256-wv2NZcKiyYaW6L/o7+oHWZdYZhVYLzZjyQczoaHRJnk="
@@ -93,6 +98,35 @@
           if pkgs.stdenv.isLinux
           then "${linuxFhsEnv}/bin/anneal-linux-fhs -c ${pkgs.lib.escapeShellArg command}"
           else command;
+
+        charonRustToolchain = charon.packages.${system}.rustToolchain;
+        charonUnwrappedForAnneal =
+          (charon.packages.${system}.charon-unwrapped.override {
+            miriSysroots = null;
+          }).overrideAttrs (_: {
+            doCheck = false;
+            checkPhase = "";
+          });
+        charonForAnneal = pkgs.runCommand "charon-for-anneal"
+          {
+            nativeBuildInputs = [ pkgs.makeWrapper ]
+              ++ pkgs.lib.optionals pkgs.stdenv.isDarwin [ pkgs.bintools ];
+          }
+          (''
+            cp -r ${charonUnwrappedForAnneal} $out
+            chmod -R u+w $out
+            wrapProgram $out/bin/charon \
+              --set CHARON_TOOLCHAIN_IS_IN_PATH 1 \
+              --prefix LD_LIBRARY_PATH : "${pkgs.lib.makeLibraryPath [ charonRustToolchain ]}" \
+              --prefix PATH : "${pkgs.lib.makeBinPath [ charonRustToolchain ]}"
+          ''
+          + pkgs.lib.optionalString pkgs.stdenv.isDarwin ''
+            install_name_tool -add_rpath "${charonRustToolchain}/lib" "$out/bin/charon-driver"
+          '');
+
+        aeneasForAnneal = aeneas.packages.${system}.aeneas.override {
+          charon = charonForAnneal;
+        };
 
         # Prebuilt Aeneas release archive.
         fetchAeneas = { target, releaseTag, sha256 }:
@@ -330,7 +364,10 @@
                 "(cd $TMPDIR/aeneas-config-primer && ${runLeanCommand "lake --no-cache --rehash -R setup-file generated/Generated.lean --quiet >/dev/null"})"
               ]
               ++ [
-                "test -f .lake/config/aeneas/lakefile.olean"
+                "if ! find .lake/config -type f -name lakefile.olean -print -quit | grep -q .; then"
+                "  echo \"ERROR: Lake did not produce a root package config lakefile\" >&2"
+                "  exit 1"
+                "fi"
                 "python3 ${./rewrite-lake-vendor.py} --root . --packages-dir ../../packages --rewrite-traces --trace-prefix \"$leanToolchain=lean\""
                 "TRACE_ABS_RE='(^|[\"[:space:]=:])/[A-Za-z0-9._~-]'"
                 "if find . ../../packages -type f -name '*.trace' -exec grep -EIl \"\$TRACE_ABS_RE\" {} + | tee /tmp/non-relocatable-traces | grep -q .; then"
@@ -368,29 +405,40 @@
           });
       in
       {
-        packages.aeneas-download = fetchAeneas {
-          target = aeneasTarget;
-          releaseTag = "nightly-2026.06.03";
-          sha256 = aeneasSha256;
-        };
+        # Aeneas release-layout tree built from the fork branch that separates
+        # undefined behavior from ordinary failure in `Result`.
+        #
+        # Do not consume upstream's `aeneas-release` output here: it bundles
+        # Charon's full release sysroots, whose fixed-output hash can drift
+        # independently of the Aeneas/Charon binaries Anneal actually invokes.
+        # Anneal supplies its own Rust sysroot, so this archive only needs the
+        # Aeneas executable, the Charon frontend and driver, and Aeneas' Lean
+        # backend sources.
+        packages.aeneas-download = pkgs.runCommand "aeneas-release-layout"
+          {
+            aeneasBin = aeneasForAnneal;
+            charonBin = charonUnwrappedForAnneal;
+          } ''
+          mkdir -p $out
+          cp -L $aeneasBin/bin/aeneas $out/aeneas
+          cp -L $charonBin/bin/charon $out/charon
+          cp -L $charonBin/bin/charon-driver $out/charon-driver
+          cp -r ${aeneas}/backends $out/backends
+          chmod +x $out/aeneas $out/charon $out/charon-driver
+        '';
 
-        # Extracts the toolchain metadata implied by the Aeneas archive.
+        # Extracts the toolchain metadata implied by the Aeneas release tree.
         packages.aeneas-unpacked = pkgs.stdenv.mkDerivation {
           pname = "aeneas-unpacked";
           version = "1.0.0";
 
           src = self.packages.${system}.aeneas-download;
 
-          nativeBuildInputs = with pkgs; [
-            gnutar
-            gzip
-          ];
-
           dontUnpack = true;
 
           buildPhase = builtins.concatStringsSep "\n" [
             "mkdir -p $out"
-            "tar -xzf $src -C $out"
+            "cp -r $src/. $out/"
             "chmod -R +w $out"
             "LEAN_RAW=\$(cat $out/backends/lean/lean-toolchain)"
             "LEAN_VERSION=\$(echo \"\$LEAN_RAW\" | sed -E 's|leanprover/lean4:v?||' | tr -d '\\n')"
@@ -417,19 +465,13 @@
 
           src = self.packages.${system}.aeneas-download;
 
-          nativeBuildInputs = with pkgs; [
-            gnutar
-            gzip
-          ];
-
           dontUnpack = true;
 
           buildPhase = builtins.concatStringsSep "\n" [
             "mkdir -p $out"
-            "tar -xzf $src -C $out --strip-components=2 \\"
-            "  backends/lean/lakefile.lean \\"
-            "  backends/lean/lake-manifest.json \\"
-            "  backends/lean/lean-toolchain"
+            "cp $src/backends/lean/lakefile.lean $out/"
+            "cp $src/backends/lean/lake-manifest.json $out/"
+            "cp $src/backends/lean/lean-toolchain $out/"
           ];
         };
 
@@ -655,8 +697,10 @@
           prepared = self.packages.${system}.aeneas-prepared-sources;
         };
 
-        # Existing users and releases retain the efficient implementation.
-        packages.aeneas-compiled = self.packages.${system}.aeneas-compiled-fast;
+        # The upstream cache seed for this Aeneas/Lean pin needs a refresh;
+        # keep the fast derivations available, but make the default archive use
+        # the clean build path until a refreshed seed is checked in upstream.
+        packages.aeneas-compiled = self.packages.${system}.aeneas-compiled-slow;
 
         # Stages the relocatable toolchain bundle before compression.
         packages.omnibus-tar-fast = pkgs.stdenv.mkDerivation {
@@ -739,10 +783,10 @@
           aeneasBuild = self.packages.${system}.aeneas-compiled-slow;
         });
 
-        packages.omnibus-tar = self.packages.${system}.omnibus-tar-fast;
+        packages.omnibus-tar = self.packages.${system}.omnibus-tar-slow;
 
-        # Final compressed toolchain archive. This is the local-development
-        # default, so keep compression fast.
+        # Final compressed toolchain archive. The fast variant keeps local
+        # rebuilds cheap when its upstream cache seed is valid.
         packages.omnibus-archive-fast = pkgs.stdenv.mkDerivation {
           pname = "anneal-toolchain-omnibus-fast";
           version = "0.1.0";
@@ -769,7 +813,7 @@
           omnibusTar = self.packages.${system}.omnibus-tar-slow;
         });
 
-        packages.omnibus-archive = self.packages.${system}.omnibus-archive-fast;
+        packages.omnibus-archive = self.packages.${system}.omnibus-archive-slow;
 
         # CI caches this archive across runs, so use a moderate compression
         # level that keeps cache/artifact size under control without making
@@ -782,7 +826,7 @@
           ANNEAL_ZSTD_LEVEL = 6;
         });
 
-        packages.omnibus-archive-ci = self.packages.${system}.omnibus-archive-ci-fast;
+        packages.omnibus-archive-ci = self.packages.${system}.omnibus-archive-ci-slow;
 
         packages.omnibus-archive-layout-check-fast =
           pkgs.runCommand "anneal-toolchain-omnibus-layout-check" {
@@ -813,10 +857,8 @@
               aeneas/bin/aeneas \
               aeneas/bin/charon \
               aeneas/bin/charon-driver \
-              aeneas/backends/lean/.lake/config/aeneas/lakefile.olean \
               aeneas/backends/lean/lakefile.lean \
               aeneas/packages/mathlib/lake-manifest.json \
-              aeneas/packages/mathlib/.lake/config/mathlib/lakefile.olean \
               lean/bin/lean \
               rust/bin/cargo \
               rust/bin/rustc; do
@@ -825,6 +867,11 @@
                 exit 1
               fi
             done
+
+            if ! grep -Eq '^aeneas/backends/lean/\.lake/config/[^/]+/lakefile\.olean$' "$TMPDIR/archive/entries"; then
+              echo "ERROR: archive is missing Aeneas root Lake config" >&2
+              exit 1
+            fi
 
             if ! grep -Eq '^aeneas/packages/mathlib/\.lake/build/lib/lean/Mathlib/.+\.olean$' "$TMPDIR/archive/entries"; then
               echo "ERROR: archive is missing Mathlib .olean cache artifacts" >&2
@@ -852,7 +899,7 @@
           });
 
         packages.omnibus-archive-layout-check =
-          self.packages.${system}.omnibus-archive-layout-check-fast;
+          self.packages.${system}.omnibus-archive-layout-check-slow;
 
         packages.rust-toolchain = fetchRustToolchain {
           inherit rustDate;

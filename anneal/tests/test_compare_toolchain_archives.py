@@ -83,13 +83,8 @@ def minimal_entries() -> list[FileEntry | HardLinkEntry]:
         ("aeneas/bin/charon", b"charon-bin", 0o755),
         ("aeneas/bin/charon-driver", b"charon-driver-bin", 0o755),
         (
-            "aeneas/backends/lean/.lake/config/aeneas/lakefile.olean",
+            "aeneas/backends/lean/.lake/config/0/lakefile.olean",
             b"aeneas-config",
-            0o444,
-        ),
-        (
-            "aeneas/packages/mathlib/.lake/config/mathlib/lakefile.olean",
-            b"mathlib-config",
             0o444,
         ),
         ("aeneas/packages/mathlib/lake-manifest.json", b"{}\n", 0o444),
@@ -193,7 +188,7 @@ class CompareToolchainArchivesTests(unittest.TestCase):
                 second_entries.append((path, b"second context", 0o444))
             replace_file(
                 second_entries,
-                "aeneas/backends/lean/.lake/config/aeneas/lakefile.olean",
+                "aeneas/backends/lean/.lake/config/0/lakefile.olean",
                 b"different context-dependent config",
                 0o444,
             )
@@ -380,7 +375,7 @@ class CompareToolchainArchivesTests(unittest.TestCase):
 
     def test_metadata_path_and_mode_inventories_must_match(self) -> None:
         trace = "aeneas/backends/lean/.lake/build/lib/lean/Extra.trace"
-        config = "aeneas/backends/lean/.lake/config/aeneas/extra.json"
+        config = "aeneas/backends/lean/.lake/config/0/extra.json"
         with tempfile.TemporaryDirectory() as tmp:
             directory = Path(tmp)
             metadata_entries = [

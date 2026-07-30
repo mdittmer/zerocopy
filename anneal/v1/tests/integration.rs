@@ -2114,6 +2114,7 @@ fn copy_dir_contents(src: &Path, dst: &Path) -> io::Result<()> {
 // - RFC 3339 timestamps (replaced with `[YYYY-MM-DDTHH:MM:SSZ `)
 // - Thread IDs in panic messages (replaced with `<ID>`)
 // - Lock-waiting messages from Cargo or other tools (removed)
+// - Charon driver cache-busting nonces (replaced with `<NONCE>`)
 // - Hexadecimal hashes in file paths or versions (replaced with `<HASH>`)
 // - Execution timings (replaced with `<TIME>`)
 // - Local IP/port combinations used in mock servers (replaced with
@@ -2123,6 +2124,8 @@ fn sanitize_output(output: &str) -> String {
     let re_thread_id = regex::Regex::new(r"thread '([^']+)' \(\d+\) panicked").unwrap();
     let re_file_lock =
         regex::Regex::new(r"(?m)^.*Blocking waiting for file lock on.*$\n?").unwrap();
+    let re_charon_cache_buster =
+        regex::Regex::new(r"charon-dont-cache-this-[0-9]+-[0-9]+\b").unwrap();
     let re_cargo_hash = regex::Regex::new(r"([-=_])([a-f0-9]{5,16})\b").unwrap();
 
     let re_timing = regex::Regex::new(r"took \d+(\.\d*)?(m?s)").unwrap();
@@ -2144,6 +2147,8 @@ fn sanitize_output(output: &str) -> String {
 
     clean = re_thread_id.replace_all(&clean, "thread '$1' (<ID>) panicked").into_owned();
     clean = re_file_lock.replace_all(&clean, "").into_owned();
+    clean =
+        re_charon_cache_buster.replace_all(&clean, "charon-dont-cache-this-<NONCE>").into_owned();
     clean = re_cargo_hash.replace_all(&clean, "${1}<HASH>").into_owned();
 
     clean = re_timing.replace_all(&clean, "took <TIME>").into_owned();

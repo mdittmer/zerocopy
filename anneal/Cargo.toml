@@ -64,8 +64,8 @@ walkdir = "2.5.0"
 sha2 = "0.10"
 tempfile = "3.27.0"
 rayon = "1.11.0"
-# `tag` is `main` branch HEAD on 2026-06-03.
-charon_lib = { package = "charon", git = "https://github.com/AeneasVerif/charon.git", tag = "nightly-2026.06.03", default-features = false }
+# Keep this revision in sync with the `charon-pin` file from the pinned Aeneas release.
+charon_lib = { package = "charon", git = "https://github.com/AeneasVerif/charon.git", rev = "527ea8e3b5dcb52edd6aef0f7bc34cc09c11dd59", default-features = false }
 
 [dev-dependencies]
 pathdiff = "0.2"

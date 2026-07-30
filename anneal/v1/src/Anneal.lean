@@ -35,6 +35,7 @@ def SpecificationHolds {α : Type} (res : Result α) (post : α → Prop) : Prop
   match res with
   | .ok v => post v
   | .fail _ => False  -- A function satisfying spec should not fail
+  | .ub => False       -- A function satisfying spec should not invoke undefined behavior
   | .div => False     -- A function satisfying spec should not diverge
 
 
