@@ -10,8 +10,10 @@
 use anyhow::Context as _;
 use clap::Parser as _;
 
+mod aeneas;
 mod annotations;
 mod charon;
+mod lake;
 mod resolve;
 mod scanner;
 mod setup;
@@ -29,7 +31,7 @@ struct Cli {
 enum Commands {
     /// Setup Anneal dependencies
     Setup(SetupArgs),
-    /// Generate LLBC for a crate (runs Charon)
+    /// Generate LLBC and Lean for a crate (runs Charon and Aeneas)
     Generate(GenerateArgs),
 
     /// Helper to acquire shared or exclusive locks for multi-process integration testing (dev only)
@@ -66,9 +68,17 @@ pub struct GenerateArgs {
     #[arg(long, value_name = "output-dir")]
     pub output_dir: Option<std::path::PathBuf>,
 
+    /// Controls where generated Lean output is placed on the filesystem
+    #[arg(long, value_name = "lean-output-dir")]
+    pub lean_output_dir: Option<std::path::PathBuf>,
+
     /// Do not show compilation progress bars
     #[arg(long)]
     pub no_progress: bool,
+
+    /// Generate Lean files and workspace metadata, but do not run Lake
+    #[arg(long)]
+    pub no_lean_build: bool,
 
     /// Recursively compile and translate all third-party dependencies to LLBC
     #[arg(long)]
@@ -103,6 +113,9 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
     if let Some(output_dir) = args.output_dir {
         locked_roots.llbc_override = Some(output_dir);
     }
+    if let Some(lean_output_dir) = args.lean_output_dir {
+        locked_roots.lean_override = Some(lean_output_dir);
+    }
     let show_progress = !args.no_progress;
     crate::charon::run_charon(
         &args.resolve_args,
@@ -111,6 +124,11 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         &packages,
         show_progress,
     )?;
+    crate::aeneas::run_aeneas(&toolchain, &locked_roots, &packages, show_progress)?;
+    crate::lake::prepare_workspace(&toolchain, &locked_roots, &packages)?;
+    if !args.no_lean_build {
+        crate::lake::build_workspace(&toolchain, &locked_roots, show_progress)?;
+    }
     Ok(())
 }
 
@@ -165,6 +183,16 @@ mod tests {
                 toolchain.aeneas_bin_dir()
             );
             assert!(
+                toolchain.aeneas_lean_dir().is_dir(),
+                "aeneas_lean_dir is not a directory: {:?}",
+                toolchain.aeneas_lean_dir()
+            );
+            assert!(
+                toolchain.lean_root().is_dir(),
+                "lean_root is not a directory: {:?}",
+                toolchain.lean_root()
+            );
+            assert!(
                 toolchain.rust_sysroot().is_dir(),
                 "rust_sysroot is not a directory: {:?}",
                 toolchain.rust_sysroot()
@@ -180,9 +208,19 @@ mod tests {
                 toolchain.rust_lib()
             );
             assert!(
+                crate::setup::Tool::Aeneas.path(&toolchain).is_file(),
+                "aeneas is not a file: {:?}",
+                crate::setup::Tool::Aeneas.path(&toolchain)
+            );
+            assert!(
                 crate::setup::Tool::Cargo.path(&toolchain).is_file(),
                 "cargo is not a file: {:?}",
                 crate::setup::Tool::Cargo.path(&toolchain)
+            );
+            assert!(
+                crate::setup::Tool::Lake.path(&toolchain).is_file(),
+                "lake is not a file: {:?}",
+                crate::setup::Tool::Lake.path(&toolchain)
             );
             assert!(
                 crate::setup::Tool::Rustc.path(&toolchain).is_file(),

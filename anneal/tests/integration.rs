@@ -60,7 +60,8 @@ fn test_generate_subcommand_simple() {
     let temp_dir = tempfile::tempdir().unwrap();
     let project_dir = temp_dir.path().join("project");
     let output_dir = temp_dir.path().join("llbc_out");
-    std::fs::create_dir_all(project_dir.join("examples")).unwrap();
+    let lean_output_dir = temp_dir.path().join("lean_out");
+    std::fs::create_dir_all(project_dir.join("src")).unwrap();
     std::fs::write(
         project_dir.join("Cargo.toml"),
         r#"
@@ -69,21 +70,16 @@ fn test_generate_subcommand_simple() {
             version = "0.1.0"
             edition = "2021"
 
-            [[example]]
-            name = "simple"
-            path = "examples/simple.rs"
+            [lib]
+            path = "src/lib.rs"
         "#,
     )
     .unwrap();
     std::fs::write(
-        project_dir.join("examples").join("simple.rs"),
+        project_dir.join("src").join("lib.rs"),
         r#"
             pub fn add(left: usize, right: usize) -> usize {
                 left + right
-            }
-
-            fn main() {
-                println!("Hello, world! {}", add(1, 2));
             }
         "#,
     )
@@ -99,10 +95,11 @@ fn test_generate_subcommand_simple() {
     cmd.arg("generate")
         .arg("--manifest-path")
         .arg(project_dir.join("Cargo.toml"))
-        .arg("--example")
-        .arg("simple")
+        .arg("--lib")
         .arg("--output-dir")
-        .arg(&output_dir);
+        .arg(&output_dir)
+        .arg("--lean-output-dir")
+        .arg(&lean_output_dir);
     cmd.arg("--no-progress");
 
     let output = cmd.output().expect("failed to execute cargo-anneal");
@@ -125,4 +122,26 @@ fn test_generate_subcommand_simple() {
     }
 
     assert!(found_llbc, "No .llbc file found in output directory {:?}", output_dir);
+
+    let mut found_lean = false;
+    if lean_output_dir.exists() {
+        for entry in std::fs::read_dir(&lean_output_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.is_dir()
+                && std::fs::read_dir(&path)
+                    .unwrap()
+                    .any(|entry| entry.unwrap().path().extension().is_some_and(|ext| ext == "lean"))
+            {
+                found_lean = true;
+                break;
+            }
+        }
+    }
+
+    assert!(found_lean, "No generated .lean files found in {:?}", lean_output_dir);
+    assert!(lean_output_dir.join("Generated.lean").is_file());
+    assert!(lean_output_dir.join("lakefile.lean").is_file());
+    assert!(lean_output_dir.join("lake-manifest.json").is_file());
+    assert!(lean_output_dir.join("lean-toolchain").is_file());
 }
