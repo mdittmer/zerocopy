@@ -11,6 +11,7 @@ use anyhow::Context as _;
 use clap::Parser as _;
 
 mod aeneas;
+mod annotation_scan;
 mod annotations;
 mod charon;
 mod lake;
@@ -109,6 +110,7 @@ fn generate(args: GenerateArgs) -> anyhow::Result<()> {
         log::warn!("No targets found to generate.");
         return Ok(());
     }
+    crate::annotation_scan::scan_workspace(&roots.metadata)?.reject_unimplemented_soundness()?;
     let mut locked_roots = roots.lock_run_root()?;
     if let Some(output_dir) = args.output_dir {
         locked_roots.llbc_override = Some(output_dir);
