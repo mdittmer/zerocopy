@@ -15,6 +15,7 @@
 #![allow(dead_code)]
 
 use core::marker::PhantomData;
+use anneal_spec::*;
 
 /// Marker trait for types with no alignment requirement
 /// (`align_of::<Self>() == 1`).
@@ -92,6 +93,23 @@ impl Unalign<u16> {
         // `Unalign<u16>` has the same 2-byte layout as `u16` at offset 0.
         unsafe { core::mem::transmute::<&Unalign<u16>, &u16>(self) }
     }
+
+    /// Overwrites the wrapped `u16` in-place through `&mut self` without
+    /// requiring 2-byte alignment on the outer wrapper, returning the stored
+    /// `u16` value (`zerocopy/src/wrappers.rs`).
+    pub const fn set(&mut self, val: u16) -> u16 {
+        *self = Unalign(val);
+        self.0
+    }
+
+    /// Returns an exclusive mutable reference to the wrapped `u16` when the
+    /// caller guarantees that `self` satisfies `u16`'s 2-byte alignment
+    /// requirement (`zerocopy/src/wrappers.rs`).
+    pub const unsafe fn deref_mut_unchecked(&mut self) -> &mut u16 {
+        // SAFETY: The caller guarantees 2-byte alignment for `self`, and
+        // `Unalign<u16>` has the same 2-byte layout as `u16` at offset 0.
+        unsafe { core::mem::transmute::<&mut Unalign<u16>, &mut u16>(self) }
+    }
 }
 
 impl Unalign<u8> {
@@ -127,6 +145,23 @@ pub const fn padding_needed_for(len: usize, align: usize) -> usize {
     !(len.wrapping_sub(1)) & (align - 1)
 }
 
+/// Computes the maximum of two `usize` values (`zerocopy/src/util/mod.rs`),
+/// annotated with a 2-argument inline `#[anneal_spec::spec]` contract.
+#[anneal_spec::spec(
+    requires: a == 4 && b == 8,
+    ensures: |ref ret| *ret == 8,
+)]
+pub fn util_max(a: usize, b: usize) -> usize {
+    if a < b { b } else { a }
+}
+
+/// Returns `true` iff `addr` is aligned to power-of-two `align`
+/// (`(addr & (align - 1)) == 0`, `zerocopy/src/util/mod.rs`).
+pub const fn validate_aligned_to(addr: usize, align: usize) -> bool {
+    let mask = align - 1;
+    (addr & mask) == 0
+}
+
 /// EtherType protocol identifier restricted to IPv4 (`0x0800`) or IPv6
 /// (`0x86DD`).
 #[anneal_spec::invariant(self.0 == 0x0800 || self.0 == 0x86DD)]
@@ -140,6 +175,34 @@ impl EtherType {
         raw == 0x0800 || raw == 0x86DD
     }
 }
+
+/// Unaligned 16-bit big-endian unsigned integer (`zerocopy/src/byteorder.rs`).
+#[repr(transparent)]
+pub struct BigEndianU16(pub [u8; 2]);
+
+impl BigEndianU16 {
+    /// Constructs a `BigEndianU16` from a native-endian `u16` by byte-swapping
+    /// `((val >> 8) | (val << 8))` and transmuting into `[u8; 2]`
+    /// (`zerocopy/src/byteorder.rs`).
+    pub const fn new(val: u16) -> BigEndianU16 {
+        let swapped: u16 = (val >> 8u32) | (val << 8u32);
+        let bytes: [u8; 2] = unsafe_transmute_via_union!(swapped, u16, [u8; 2]);
+        BigEndianU16(bytes)
+    }
+
+    /// Decodes `self` into a native-endian `u16` by transmuting `[u8; 2]` to
+    /// `u16` and byte-swapping `((raw >> 8) | (raw << 8))`
+    /// (`zerocopy/src/byteorder.rs`).
+    pub const fn get(self) -> u16 {
+        let raw: u16 = unsafe_transmute_via_union!(self.0, [u8; 2], u16);
+        (raw >> 8u32) | (raw << 8u32)
+    }
+}
+
+// SAFETY: `BigEndianU16` is `#[repr(transparent)]` over `[u8; 2]`, which has
+// alignment 1 (`zerocopy/src/byteorder.rs`).
+#[anneal_spec::unsafe_impl(true)]
+unsafe impl Unaligned for BigEndianU16 {}
 
 /// Unaligned network packet header composed of three `Unalign<u16>` fields
 /// (`zerocopy/src/wrappers.rs`).

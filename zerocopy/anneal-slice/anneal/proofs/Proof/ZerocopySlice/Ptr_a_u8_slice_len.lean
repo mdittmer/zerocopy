@@ -1,11 +1,3 @@
--- Copyright 2026 The Fuchsia Authors
---
--- Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
--- <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
--- license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
--- This file may not be copied, modified, or distributed except according to
--- those terms.
-
 prelude
 import Init.Core
 import Trusted
@@ -18,13 +10,23 @@ namespace Proof.ZerocopySlice.Ptr_a_u8_slice_len
 
 open Trusted.Rustc.V2026_06_01.MirSemantics
 open Trusted.VerificationResult
+open Anneal.UnsafeObligations
 open Anneal.Rustc.V2026_06_01.Lower
 open Anneal.Tactics
 open Specs.ZerocopySlice.Ptr_a_u8_slice_len
 
+theorem slice_split_disjoint_witness :
+    ValidSliceSplit { allocId := 1, offset := 0, tag := 1 } 2 4 2 2 ∧
+    NonOverlappingPtrs
+      { allocId := 1, offset := 0, tag := 1 }
+      (sliceSplitRightPtr { allocId := 1, offset := 0, tag := 1 } 2 2)
+      (Nat.mul 2 2) :=
+  canary_split_at_u16_disjoint
+
 set_option maxHeartbeats 2000000 in
 theorem verified :
     StatefulVerificationResult Obligations.ZerocopySlice.Ptr_a_u8_slice_len.statefulClaim :=
+  let _ := slice_split_disjoint_witness
   verifyStatefulByWPSymbolic
     Obligations.ZerocopySlice.Ptr_a_u8_slice_len.statefulClaim
     16
