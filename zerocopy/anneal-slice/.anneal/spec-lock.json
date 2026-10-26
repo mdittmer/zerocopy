@@ -1,0 +1,201 @@
+{
+  "schema": "anneal.spec-lock.v1",
+  "locked_records": [
+    {
+      "def_id": "zerocopy_slice::EtherType::__anneal_type_invariant_ether_type",
+      "lean_module_name": "Mir.ZerocopySlice.EtherType___anneal_type_invariant_ether_type",
+      "item_kind": "type_invariant",
+      "associated_subject_def_id": "zerocopy_slice::EtherType",
+      "mir_module_sha256": "bb68add84f6e0f301a96f7b659cc57ede673781b280b8bff3688dbf7393fbac1"
+    },
+    {
+      "def_id": "zerocopy_slice::EtherType::is_valid_bit_pattern",
+      "lean_module_name": "Mir.ZerocopySlice.EtherType_is_valid_bit_pattern",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "3de0e3db8000cc6ff3e6eea9ab5224b2f89c5d7338b072b88fe74678786e09c7"
+    },
+    {
+      "def_id": "zerocopy_slice::PacketHeader::__anneal_type_invariant_packet_header",
+      "lean_module_name": "Mir.ZerocopySlice.PacketHeader___anneal_type_invariant_packet_header",
+      "item_kind": "type_invariant",
+      "associated_subject_def_id": "zerocopy_slice::PacketHeader",
+      "mir_module_sha256": "0f5f94469da6e03bba5483b907531daebb9d9e1fd16c2290757e589474e4179b"
+    },
+    {
+      "def_id": "zerocopy_slice::PacketHeader::set_ports",
+      "lean_module_name": "Mir.ZerocopySlice.PacketHeader_set_ports",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "4bcd39fd78465dcb6e6d716e5efa714c903084b104e3cf973ad89a669e8f205d"
+    },
+    {
+      "def_id": "zerocopy_slice::PacketHeader::total_packet_len",
+      "lean_module_name": "Mir.ZerocopySlice.PacketHeader_total_packet_len",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "89037c2af1dc3b3adff63a3fea89a5b5a790f42efba1f29d626b6a022989d234"
+    },
+    {
+      "def_id": "zerocopy_slice::Ptr::<'a, PacketHeader>::as_ref",
+      "lean_module_name": "Mir.ZerocopySlice.Ptr_a_PacketHeader_as_ref",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "11d452d3bb2ed75f4726ad138fed58797309c82cdc4e9d6f9157572400bd14bf"
+    },
+    {
+      "def_id": "zerocopy_slice::Ptr::<'a, [u8]>::slice_len",
+      "lean_module_name": "Mir.ZerocopySlice.Ptr_a_u8_slice_len",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "5e72d70fed0cd449c170ae56bf02fffb4808a6be57ac953407d3de47cd3c456e"
+    },
+    {
+      "def_id": "zerocopy_slice::Unalign::<u16>::deref_unchecked",
+      "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_deref_unchecked",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "4c9d850e680b1b65d615fbb39536bd58e3d5c7a7ca9de7b528d8cbbe8c973810"
+    },
+    {
+      "def_id": "zerocopy_slice::Unalign::<u16>::get",
+      "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_get",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "f9b0f484a2d9ce0116058540b2389741e65810b01b3ce12cdbb974685ea5d3ee"
+    },
+    {
+      "def_id": "zerocopy_slice::Unalign::<u16>::into_inner",
+      "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_into_inner",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "5b09c0ad5487c343cd11e9d95cbff4cc9f736f58fcef13981c1ac26c8b5507ea"
+    },
+    {
+      "def_id": "zerocopy_slice::Unalign::<u16>::new",
+      "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_new",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "d4e051c3612afbfecc7e5c3217d3ebf5532c5f2ea1691c3409ac88f84f1f3d45"
+    },
+    {
+      "def_id": "zerocopy_slice::Unalign::<u8>::deref",
+      "lean_module_name": "Mir.ZerocopySlice.Unalign_u8_deref",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "1bcc68f59168510ecb4e57f7d7d6e0a3c631f9c26d112b925ec6c6eb841547a8"
+    },
+    {
+      "def_id": "zerocopy_slice::__anneal_unsafe_impl_FromBytes_for_PacketHeader",
+      "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_FromBytes_for_PacketHeader",
+      "item_kind": "unsafe_trait_impl",
+      "associated_subject_def_id": "FromBytes::PacketHeader",
+      "mir_module_sha256": "a0821900fdefcba99d139ca8bfbb78b6a478313eceb62936df533e3e9e538587"
+    },
+    {
+      "def_id": "zerocopy_slice::__anneal_unsafe_impl_FromZeros_for_PacketHeader",
+      "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_FromZeros_for_PacketHeader",
+      "item_kind": "unsafe_trait_impl",
+      "associated_subject_def_id": "FromZeros::PacketHeader",
+      "mir_module_sha256": "5c970aac6033c5cafb218c957376f67d5d34f3decd320f575251878f4bf26f47"
+    },
+    {
+      "def_id": "zerocopy_slice::__anneal_unsafe_impl_IntoBytes_for_PacketHeader",
+      "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_IntoBytes_for_PacketHeader",
+      "item_kind": "unsafe_trait_impl",
+      "associated_subject_def_id": "IntoBytes::PacketHeader",
+      "mir_module_sha256": "722958df909015f394845e598a07041a086d605c8a2e584da7db67bc64a80815"
+    },
+    {
+      "def_id": "zerocopy_slice::__anneal_unsafe_impl_TryFromBytes_for_PacketHeader",
+      "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_TryFromBytes_for_PacketHeader",
+      "item_kind": "unsafe_trait_impl",
+      "associated_subject_def_id": "TryFromBytes::PacketHeader",
+      "mir_module_sha256": "bdc990fffc2dde846149ea01b7179f5f3be4b30656b7679e26ee3e0b8bcbdc96"
+    },
+    {
+      "def_id": "zerocopy_slice::__anneal_unsafe_impl_Unaligned_for_PacketHeader",
+      "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_Unaligned_for_PacketHeader",
+      "item_kind": "unsafe_trait_impl",
+      "associated_subject_def_id": "Unaligned::PacketHeader",
+      "mir_module_sha256": "59e81740937111a860dcc0a80b83d3efaca5feff69bd98f8ff525dcdb0873247"
+    },
+    {
+      "def_id": "zerocopy_slice::padding_needed_for",
+      "lean_module_name": "Mir.ZerocopySlice.padding_needed_for",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "9a5fea381ef7a1d011f4ccd508da5a693ad71bb923f47f499adfeb180fdfdca0"
+    },
+    {
+      "def_id": "zerocopy_slice::round_down_to_next_multiple_of_alignment",
+      "lean_module_name": "Mir.ZerocopySlice.round_down_to_next_multiple_of_alignment",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "9370c9fe29cfba7046d7b09b056f95f279a916a0493fa27f77fd6885748c6448"
+    },
+    {
+      "def_id": "zerocopy_slice::transmute_unchecked",
+      "lean_module_name": "Mir.ZerocopySlice.transmute_unchecked",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "9c4fe60e54b361eb4cc83806867dfa2c56af72e1ece39f77cf36cbf65a742e4b"
+    }
+  ],
+  "locked_specs_files": [
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/EtherType_is_valid_bit_pattern.lean",
+      "sha256": "a9f313c71728233a3ee262f7158c5ec5d1782a69e7adcd75fafd503c13dc84f9"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/PacketHeader_set_ports.lean",
+      "sha256": "bc2f48b96cfbe1bf32354e795bb48b8036d49aacd86829ee9f32f1f3a41fd002"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/PacketHeader_total_packet_len.lean",
+      "sha256": "77063ec87f938477321845f4d1da7a180a9dc641495dfec2d147e001b1b090fb"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Ptr_a_PacketHeader_as_ref.lean",
+      "sha256": "87b05177785f661fb9407904cc96bcd44c1646cfa13a9e45a46aca59eafef2d6"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Ptr_a_u8_slice_len.lean",
+      "sha256": "a4c5e6ef71a4ef607bb9bcbb8413ed323dab3edbc3fa98752fd048305493b5ef"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u16_deref_unchecked.lean",
+      "sha256": "053e71faf083a794187f3af6c8e814803141fb131c11a9a20ed574709975f311"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u16_get.lean",
+      "sha256": "e7f41db8ce8236e5a2865a25327c004f7dde11f0a4e94277c991ceb37aaf91fe"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u16_into_inner.lean",
+      "sha256": "1ffb6fdf099c650393b814e3810e96b6ec0ee718e22ce00fab93333c4dc291ed"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u16_new.lean",
+      "sha256": "da56a1795eb0ad0449785ca2a13c8fc111e7137bbb5444c06bb01b317bcb2e9f"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u8_deref.lean",
+      "sha256": "befda61d0a9443efd2fae8cdabc1a44f5f9ad19458d6146263bc570593e4eed4"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/padding_needed_for.lean",
+      "sha256": "e52f5cb7dc1cbedf7411d4acb8372ec09ea570a234d1b0de39b0c0a333da4619"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/round_down_to_next_multiple_of_alignment.lean",
+      "sha256": "e717778d6a430cd4492c242e513d84afeca0936bfbfdca01a7c6a52607506d78"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/transmute_unchecked.lean",
+      "sha256": "ecc6f31a7f97e01b2ccb73319c8fe4f25ad59c250094152ccf51fae46be659c1"
+    }
+  ],
+  "locked_assumptions_files": [
+  ]
+}

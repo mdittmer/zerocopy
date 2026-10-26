@@ -1,0 +1,28 @@
+# Copyright 2026 The Fuchsia Authors
+#
+# Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
+# <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+# license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+# This file may not be copied, modified, or distributed except according to
+# those terms.
+
+[workspace]
+
+[package]
+name = "zerocopy_slice"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+anneal-spec = { path = "/usr/local/google/Projects/anneal/crates/anneal-spec" }
+
+[patch.crates-io]
+anodized = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-0.7.0" }
+anodized-core = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-core-0.7.0" }
+anodized-logic = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-logic-0.7.0" }
+anodized-macros = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-macros-0.7.0" }
+bitflags = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bitflags-2.13.2" }
+num-bigint = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8" }
+num-integer = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-integer-0.1.47" }
+num-traits = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19" }
