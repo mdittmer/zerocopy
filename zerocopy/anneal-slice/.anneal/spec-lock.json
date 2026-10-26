@@ -2,147 +2,225 @@
   "schema": "anneal.spec-lock.v1",
   "locked_records": [
     {
+      "def_id": "zerocopy_slice::BigEndianU16::get",
+      "lean_module_name": "Mir.ZerocopySlice.BigEndianU16_get",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "92fa81ee0c4cd030d9566b544c22771f58fd9a0c0e9a71e10eaca01aef71f741"
+    },
+    {
+      "def_id": "zerocopy_slice::BigEndianU16::new",
+      "lean_module_name": "Mir.ZerocopySlice.BigEndianU16_new",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "4c05fa6876e9bca58f5366e9fa94b9d31a5589dee3802239b295be04cd74172f"
+    },
+    {
       "def_id": "zerocopy_slice::EtherType::__anneal_type_invariant_ether_type",
       "lean_module_name": "Mir.ZerocopySlice.EtherType___anneal_type_invariant_ether_type",
       "item_kind": "type_invariant",
       "associated_subject_def_id": "zerocopy_slice::EtherType",
-      "mir_module_sha256": "bb68add84f6e0f301a96f7b659cc57ede673781b280b8bff3688dbf7393fbac1"
+      "mir_module_sha256": "ab88ba23048c889f554437c8894a48d49947f936d0e355b29412ffcae13848bd"
     },
     {
       "def_id": "zerocopy_slice::EtherType::is_valid_bit_pattern",
       "lean_module_name": "Mir.ZerocopySlice.EtherType_is_valid_bit_pattern",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "3de0e3db8000cc6ff3e6eea9ab5224b2f89c5d7338b072b88fe74678786e09c7"
+      "mir_module_sha256": "92e0f6c52e2cb700d64c0f7425089849469127898f23bd4f78870ebeca6ab44e"
     },
     {
       "def_id": "zerocopy_slice::PacketHeader::__anneal_type_invariant_packet_header",
       "lean_module_name": "Mir.ZerocopySlice.PacketHeader___anneal_type_invariant_packet_header",
       "item_kind": "type_invariant",
       "associated_subject_def_id": "zerocopy_slice::PacketHeader",
-      "mir_module_sha256": "0f5f94469da6e03bba5483b907531daebb9d9e1fd16c2290757e589474e4179b"
+      "mir_module_sha256": "b56753741e02e29a338723c1b2c6e9ceceda75da500782e509895f00ad1c129a"
     },
     {
       "def_id": "zerocopy_slice::PacketHeader::set_ports",
       "lean_module_name": "Mir.ZerocopySlice.PacketHeader_set_ports",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "4bcd39fd78465dcb6e6d716e5efa714c903084b104e3cf973ad89a669e8f205d"
+      "mir_module_sha256": "08a8b190822ee1bf5149ca1c4d04798ebec0a897ea9445ad9be5c9a3f3a83987"
     },
     {
       "def_id": "zerocopy_slice::PacketHeader::total_packet_len",
       "lean_module_name": "Mir.ZerocopySlice.PacketHeader_total_packet_len",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "89037c2af1dc3b3adff63a3fea89a5b5a790f42efba1f29d626b6a022989d234"
+      "mir_module_sha256": "c9e76b5d5493a0b79d8b2a8514e9da07d57230818a1f0d9c1a0d479875c1aa7f"
     },
     {
       "def_id": "zerocopy_slice::Ptr::<'a, PacketHeader>::as_ref",
       "lean_module_name": "Mir.ZerocopySlice.Ptr_a_PacketHeader_as_ref",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "11d452d3bb2ed75f4726ad138fed58797309c82cdc4e9d6f9157572400bd14bf"
+      "mir_module_sha256": "ea916fbf21a2f259efc2f673e695dac93aea07fbc325acee22bfea133826f6cc"
     },
     {
       "def_id": "zerocopy_slice::Ptr::<'a, [u8]>::slice_len",
       "lean_module_name": "Mir.ZerocopySlice.Ptr_a_u8_slice_len",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "5e72d70fed0cd449c170ae56bf02fffb4808a6be57ac953407d3de47cd3c456e"
+      "mir_module_sha256": "dcf4213fbad8ed99621a6d1d150de0925ab4b6dccbafa6a7eec822fe675c98a0"
+    },
+    {
+      "def_id": "zerocopy_slice::Unalign::<u16>::deref_mut_unchecked",
+      "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_deref_mut_unchecked",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "316adfdf09d91ce3384e27cbc526475efba970d92328a5d973dae7963cb1de0e"
     },
     {
       "def_id": "zerocopy_slice::Unalign::<u16>::deref_unchecked",
       "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_deref_unchecked",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "4c9d850e680b1b65d615fbb39536bd58e3d5c7a7ca9de7b528d8cbbe8c973810"
+      "mir_module_sha256": "2ebb872215815364f9fb9bb5bd321fb1b86c1256c3db6bb40b7899a750b51e49"
     },
     {
       "def_id": "zerocopy_slice::Unalign::<u16>::get",
       "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_get",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "f9b0f484a2d9ce0116058540b2389741e65810b01b3ce12cdbb974685ea5d3ee"
+      "mir_module_sha256": "d35a5f719293d3547ae5d06202ddca6ac99901bc773ff2ad2c29593c499dc97f"
     },
     {
       "def_id": "zerocopy_slice::Unalign::<u16>::into_inner",
       "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_into_inner",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "5b09c0ad5487c343cd11e9d95cbff4cc9f736f58fcef13981c1ac26c8b5507ea"
+      "mir_module_sha256": "4f6fb8cde51de9b06dbc0a2bb6f55a577c01bd7a1419d961fa7f4f957a5cb140"
     },
     {
       "def_id": "zerocopy_slice::Unalign::<u16>::new",
       "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_new",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "d4e051c3612afbfecc7e5c3217d3ebf5532c5f2ea1691c3409ac88f84f1f3d45"
+      "mir_module_sha256": "71134ee40a73419b16c691dd9f2691938d055da5f0d43ab3c069e7027da7d495"
+    },
+    {
+      "def_id": "zerocopy_slice::Unalign::<u16>::set",
+      "lean_module_name": "Mir.ZerocopySlice.Unalign_u16_set",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "8356785c9f4e82dcf2c537be5096d4ca00e39d744891ea8b0c7541bcfbbb211d"
     },
     {
       "def_id": "zerocopy_slice::Unalign::<u8>::deref",
       "lean_module_name": "Mir.ZerocopySlice.Unalign_u8_deref",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "1bcc68f59168510ecb4e57f7d7d6e0a3c631f9c26d112b925ec6c6eb841547a8"
+      "mir_module_sha256": "b5584bbdd276efc1fc65d302bdea5ee458672243091c417d0a95ed00d1aeea7d"
     },
     {
       "def_id": "zerocopy_slice::__anneal_unsafe_impl_FromBytes_for_PacketHeader",
       "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_FromBytes_for_PacketHeader",
       "item_kind": "unsafe_trait_impl",
       "associated_subject_def_id": "FromBytes::PacketHeader",
-      "mir_module_sha256": "a0821900fdefcba99d139ca8bfbb78b6a478313eceb62936df533e3e9e538587"
+      "mir_module_sha256": "757829f683873652dd0d0d41ca1378627c3c5522d16c17ff12cd1ace2abf56bd"
     },
     {
       "def_id": "zerocopy_slice::__anneal_unsafe_impl_FromZeros_for_PacketHeader",
       "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_FromZeros_for_PacketHeader",
       "item_kind": "unsafe_trait_impl",
       "associated_subject_def_id": "FromZeros::PacketHeader",
-      "mir_module_sha256": "5c970aac6033c5cafb218c957376f67d5d34f3decd320f575251878f4bf26f47"
+      "mir_module_sha256": "a3d482f78d741f46d66d3401eb5227b8ee2ecc21aaa141a143e9aff6be5d905e"
     },
     {
       "def_id": "zerocopy_slice::__anneal_unsafe_impl_IntoBytes_for_PacketHeader",
       "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_IntoBytes_for_PacketHeader",
       "item_kind": "unsafe_trait_impl",
       "associated_subject_def_id": "IntoBytes::PacketHeader",
-      "mir_module_sha256": "722958df909015f394845e598a07041a086d605c8a2e584da7db67bc64a80815"
+      "mir_module_sha256": "51df5892c3222ae67a846c82636e5a5f5847c4a937e3f7a9f3cdad77dc7c9871"
     },
     {
       "def_id": "zerocopy_slice::__anneal_unsafe_impl_TryFromBytes_for_PacketHeader",
       "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_TryFromBytes_for_PacketHeader",
       "item_kind": "unsafe_trait_impl",
       "associated_subject_def_id": "TryFromBytes::PacketHeader",
-      "mir_module_sha256": "bdc990fffc2dde846149ea01b7179f5f3be4b30656b7679e26ee3e0b8bcbdc96"
+      "mir_module_sha256": "b898650e7c23099626eb0ce12830a0f684e0ff014f3b0c011b629c5b21fef1f2"
+    },
+    {
+      "def_id": "zerocopy_slice::__anneal_unsafe_impl_Unaligned_for_BigEndianU16",
+      "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_Unaligned_for_BigEndianU16",
+      "item_kind": "unsafe_trait_impl",
+      "associated_subject_def_id": "Unaligned::BigEndianU16",
+      "mir_module_sha256": "34c5a93e5dca3a1783583a6d9a0afaf9f24cf2720ff328ac53b084849a099fa6"
     },
     {
       "def_id": "zerocopy_slice::__anneal_unsafe_impl_Unaligned_for_PacketHeader",
       "lean_module_name": "Mir.ZerocopySlice.__anneal_unsafe_impl_Unaligned_for_PacketHeader",
       "item_kind": "unsafe_trait_impl",
       "associated_subject_def_id": "Unaligned::PacketHeader",
-      "mir_module_sha256": "59e81740937111a860dcc0a80b83d3efaca5feff69bd98f8ff525dcdb0873247"
+      "mir_module_sha256": "066dab7426a96384b055f6ca7668019409747610f759fd60d50c44d6a5109769"
+    },
+    {
+      "def_id": "zerocopy_slice::__anodized_fn_ensures_util_max",
+      "lean_module_name": "Mir.ZerocopySlice.__anodized_fn_ensures_util_max",
+      "item_kind": "inline_spec_ensures",
+      "associated_subject_def_id": "zerocopy_slice::util_max",
+      "mir_module_sha256": "750eea3484ac43d6b51b0fb35e043011971430db284114ad856e2880a83aecab"
+    },
+    {
+      "def_id": "zerocopy_slice::__anodized_fn_qualifiers_util_max",
+      "lean_module_name": "Mir.ZerocopySlice.__anodized_fn_qualifiers_util_max",
+      "item_kind": "inline_spec_qualifiers",
+      "associated_subject_def_id": "zerocopy_slice::util_max",
+      "mir_module_sha256": "3fa939aafcb2800fd43ecd24a0755402884c0e06b1fc9e2fb563717cdff65788"
+    },
+    {
+      "def_id": "zerocopy_slice::__anodized_fn_requires_util_max",
+      "lean_module_name": "Mir.ZerocopySlice.__anodized_fn_requires_util_max",
+      "item_kind": "inline_spec_requires",
+      "associated_subject_def_id": "zerocopy_slice::util_max",
+      "mir_module_sha256": "6003ec04a613afe67501183f92ec49a6a264b00479c98d3416800de78ec9c3a8"
     },
     {
       "def_id": "zerocopy_slice::padding_needed_for",
       "lean_module_name": "Mir.ZerocopySlice.padding_needed_for",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "9a5fea381ef7a1d011f4ccd508da5a693ad71bb923f47f499adfeb180fdfdca0"
+      "mir_module_sha256": "0eb9852fd440d4678258b3817008d4716e33f694cb73665f0abcb443df78568c"
     },
     {
       "def_id": "zerocopy_slice::round_down_to_next_multiple_of_alignment",
       "lean_module_name": "Mir.ZerocopySlice.round_down_to_next_multiple_of_alignment",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "9370c9fe29cfba7046d7b09b056f95f279a916a0493fa27f77fd6885748c6448"
+      "mir_module_sha256": "f2767afb78003ded9b432dd41b16f15a46a1fb5453f024b2b737d261d88cc07b"
     },
     {
       "def_id": "zerocopy_slice::transmute_unchecked",
       "lean_module_name": "Mir.ZerocopySlice.transmute_unchecked",
       "item_kind": "subject",
       "associated_subject_def_id": null,
-      "mir_module_sha256": "9c4fe60e54b361eb4cc83806867dfa2c56af72e1ece39f77cf36cbf65a742e4b"
+      "mir_module_sha256": "b8c7ff0906cf19449f46e7edc8acf4e4cc50625aca031ea8f59be6a8ec3772ba"
+    },
+    {
+      "def_id": "zerocopy_slice::util_max",
+      "lean_module_name": "Mir.ZerocopySlice.util_max",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "9db3843a27879cba2dbc837a5b226cda0246cc70960e89426b444cc4a4a717aa"
+    },
+    {
+      "def_id": "zerocopy_slice::validate_aligned_to",
+      "lean_module_name": "Mir.ZerocopySlice.validate_aligned_to",
+      "item_kind": "subject",
+      "associated_subject_def_id": null,
+      "mir_module_sha256": "44ed670aef77bbc5bf1afc58b90515736353223313630a7b09331c9c4f151d15"
     }
   ],
   "locked_specs_files": [
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/BigEndianU16_get.lean",
+      "sha256": "e9ddf9a1c6987e00cde0921186af4872dcd01db6286261656d275edbd93b386d"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/BigEndianU16_new.lean",
+      "sha256": "d2987d7ccc8d066ec3848fea39a4bcf9b9db08ec96517525dc13e37b4b9c2246"
+    },
     {
       "rel_path": "anneal/proofs/Specs/ZerocopySlice/EtherType_is_valid_bit_pattern.lean",
       "sha256": "a9f313c71728233a3ee262f7158c5ec5d1782a69e7adcd75fafd503c13dc84f9"
@@ -164,6 +242,10 @@
       "sha256": "a4c5e6ef71a4ef607bb9bcbb8413ed323dab3edbc3fa98752fd048305493b5ef"
     },
     {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u16_deref_mut_unchecked.lean",
+      "sha256": "544025d751c3fb589e3ca70bbb7e265d1811c74d1c89a883a84650cc3fcad2c9"
+    },
+    {
       "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u16_deref_unchecked.lean",
       "sha256": "053e71faf083a794187f3af6c8e814803141fb131c11a9a20ed574709975f311"
     },
@@ -180,6 +262,10 @@
       "sha256": "da56a1795eb0ad0449785ca2a13c8fc111e7137bbb5444c06bb01b317bcb2e9f"
     },
     {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u16_set.lean",
+      "sha256": "096234be650138db3284de2a0a67c1acb470c2bbc49509c5eb03ee6aba319de4"
+    },
+    {
       "rel_path": "anneal/proofs/Specs/ZerocopySlice/Unalign_u8_deref.lean",
       "sha256": "befda61d0a9443efd2fae8cdabc1a44f5f9ad19458d6146263bc570593e4eed4"
     },
@@ -194,6 +280,10 @@
     {
       "rel_path": "anneal/proofs/Specs/ZerocopySlice/transmute_unchecked.lean",
       "sha256": "ecc6f31a7f97e01b2ccb73319c8fe4f25ad59c250094152ccf51fae46be659c1"
+    },
+    {
+      "rel_path": "anneal/proofs/Specs/ZerocopySlice/validate_aligned_to.lean",
+      "sha256": "9035536c426cd8047eb159d003acbf1b8b2cc4d13f33e1dd72e239fdbcab391d"
     }
   ],
   "locked_assumptions_files": [

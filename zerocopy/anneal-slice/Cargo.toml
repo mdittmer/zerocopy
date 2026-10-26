@@ -15,14 +15,14 @@ edition = "2024"
 publish = false
 
 [dependencies]
-anneal-spec = { path = "/usr/local/google/Projects/anneal/crates/anneal-spec" }
+anneal-spec = { path = "../../../anneal/crates/anneal-spec" }
 
 [patch.crates-io]
-anodized = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-0.7.0" }
-anodized-core = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-core-0.7.0" }
-anodized-logic = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-logic-0.7.0" }
-anodized-macros = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-macros-0.7.0" }
-bitflags = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bitflags-2.13.2" }
-num-bigint = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8" }
-num-integer = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-integer-0.1.47" }
-num-traits = { path = "/usr/local/google/home/markdittmer/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19" }
+anodized = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-0.7.0" }
+anodized-core = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-core-0.7.0" }
+anodized-logic = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-logic-0.7.0" }
+anodized-macros = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/anodized-macros-0.7.0" }
+bitflags = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/bitflags-2.13.2" }
+num-bigint = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-bigint-0.4.8" }
+num-integer = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-integer-0.1.47" }
+num-traits = { path = "/home/groupagent-anneal-bot/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/num-traits-0.2.19" }
