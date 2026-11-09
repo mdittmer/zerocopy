@@ -21,8 +21,8 @@
       "rustc_version": "1.83.0",
       "rustc_commit": "90b35a6239c3d8bdabc530a6a0816f7ff89a0aaf",
       "host": "x86_64-unknown-linux-gnu",
-      "sysroot": "/usr/local/google/home/joshlf/.rustup/toolchains/1.83.0-x86_64-unknown-linux-gnu",
-      "docs_root": "/usr/local/google/home/joshlf/.rustup/toolchains/1.83.0-x86_64-unknown-linux-gnu/share/doc/rust/html",
+      "sysroot": "/home/user/.rustup/toolchains/1.83.0-x86_64-unknown-linux-gnu",
+      "docs_root": "/home/user/.rustup/toolchains/1.83.0-x86_64-unknown-linux-gnu/share/doc/rust/html",
       "rustc_verbose_sha256": "b7ae0e7c08f6345648e164d85d6e21d01282f0919e9c1dbc50392df53dbdfab7"
     },
     "quotation_match_algorithm": "Decode HTML character references with the HTML parser. For a URL with a fragment, require exactly one matching element and scope h1-h6 through the next heading of equal or higher rank, a rustdoc item to its containing details element, a regular item to its containing section element, or otherwise the identified element itself. For a fragmentless citation, scope only the exact content-addressed page and make no subsection claim. Within one p, li, td, dd, pre, tr, or h1-h6 semantic element, insert one ASCII space at block and table-cell DOM boundaries, map curly quotation marks to ASCII, remove Markdown backticks, collapse whitespace runs to one ASCII space, trim, and require a nonempty exact character sequence; never concatenate distinct semantic elements.",

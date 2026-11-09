@@ -1,5 +1,5 @@
   × unknown declaration
-   ╭─[/usr/local/google/home/joshlf/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/sizedness/source/src/lib.rs:8:5]
+   ╭─[/home/user/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/sizedness/source/src/lib.rs:8:5]
  7 │ /// context
  8 │ /// derive_sized NamedStruct
    ·     ────────────┬───────────
@@ -8,7 +8,7 @@
    ╰────
 
   ⚠ declaration uses `sorry`
-    ╭─[/usr/local/google/home/joshlf/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/sizedness/source/src/lib.rs:10:8]
+    ╭─[/home/user/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/sizedness/source/src/lib.rs:10:8]
   9 │ /// ```
  10 │ pub fn foo(_f: &NamedStruct) {}
     ·        ──┬─

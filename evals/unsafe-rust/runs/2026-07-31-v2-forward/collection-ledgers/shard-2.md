@@ -1,8 +1,8 @@
 # Shard 2 operational ledger
 
 - Claim: shard 2, created atomically by this collection thread.
-- Worktree: `/usr/local/google/home/joshlf/workspace/zerocopy/unsafe-code-skill`
-- Frozen manifest: `/usr/local/google/home/joshlf/workspace/zerocopy/unsafe-code-skill/evals/unsafe-rust/runs/2026-07-31-v2-forward/manifest.md`
+- Worktree: `/home/user/workspace/zerocopy/unsafe-code-skill`
+- Frozen manifest: `/home/user/workspace/zerocopy/unsafe-code-skill/evals/unsafe-rust/runs/2026-07-31-v2-forward/manifest.md`
 - Shared runtime: `/tmp/unsafe-rust-v2-eval.9epWDK`
 - Assigned IDs: `r010, r014, r018, r022, r026, r030, r034, r038, r042, r046, r050, r054, r058, r062, r066, r070, r074, r078, r082, r086, r090, r094, r098, r102, r106, r110, r114, r118, r122, r126, r130, r134, r138, r142, r146, r150`
 
