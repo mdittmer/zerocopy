@@ -3,11 +3,11 @@ defaultTargets = ["Verify"]
 
 [[lean_lib]]
 name = "Trusted"
-srcDir = "/usr/local/google/Projects/anneal/trusted/lean"
+srcDir = "../../../../anneal/trusted/lean"
 
 [[lean_lib]]
 name = "Anneal"
-srcDir = "/usr/local/google/Projects/anneal/theory"
+srcDir = "../../../../anneal/theory"
 
 [[lean_lib]]
 name = "Mir"

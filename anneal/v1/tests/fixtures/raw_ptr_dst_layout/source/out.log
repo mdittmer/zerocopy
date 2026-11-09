@@ -16,7 +16,7 @@ slice : ConstRawPtr (Slice Std.U8)
   │ 
   │ Note: This linter can be disabled with `set_option linter.unusedSimpArgs
   │ false`
-    ╭─[/usr/local/google/home/joshlf/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/raw_ptr_dst_layout/source/src/lib.rs:32:13]
+    ╭─[/home/user/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/raw_ptr_dst_layout/source/src/lib.rs:32:13]
  31 │ ///   unfold test_slice
  32 │ ///   simp [size_of_val_raw.spec, align_of_val_raw.spec]
     ·             ──────────┬─────────
@@ -32,7 +32,7 @@ slice : ConstRawPtr (Slice Std.U8)
   │ 
   │ Note: This linter can be disabled with `set_option linter.unusedSimpArgs
   │ false`
-    ╭─[/usr/local/google/home/joshlf/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/raw_ptr_dst_layout/source/src/lib.rs:32:35]
+    ╭─[/home/user/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/raw_ptr_dst_layout/source/src/lib.rs:32:35]
  31 │ ///   unfold test_slice
  32 │ ///   simp [size_of_val_raw.spec, align_of_val_raw.spec]
     ·                                   ──────────┬──────────
@@ -54,7 +54,7 @@ ptr : ConstRawPtr NonReprC
   │ 
   │ Note: This linter can be disabled with `set_option linter.unusedSimpArgs
   │ false`
-    ╭─[/usr/local/google/home/joshlf/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/raw_ptr_dst_layout/source/src/lib.rs:47:13]
+    ╭─[/home/user/workspace/zerocopy/anneal/tools/anneal/tests/fixtures/raw_ptr_dst_layout/source/src/lib.rs:47:13]
  46 │ ///   unfold test_non_repr_c_align
  47 │ ///   simp [align_of_val_raw.spec]
     ·             ──────────┬──────────
