@@ -18,14 +18,14 @@ This script enforces the anti-bitrot and containment invariants for
    manifests, Lean files, themes, templates, SVGs, and raw HTML files are
    rejected by default.
 2. Default-deny inline code fences and post-build HTML parity: Markdown files
-   under `book/src/` may not contain raw `rust`, `rs`, `sh`, `bash`, `shell`,
-   `zsh`, or `console` fenced code blocks. Every `{{#include ...}}` /
-   `{{#rustdoc_include ...}}` directive must live inside a checked fence and
-   target a registered verified artifact of a `case.json` under
-   `book/examples/`. All other unescaped `{{#...}}` directives are rejected.
-   After `mdbook build`, every rendered `<pre><code class="language-*">` block
-   in authored chapters is also verified against the exact verified artifact
-   texts, structurally closing CommonMark parser-desync bypasses.
+   under `book/src/` may not contain raw `rust`, `rs`, `lean`, `json`, `sh`,
+   `bash`, `shell`, `zsh`, or `console` fenced code blocks. Every
+   `{{#include ...}}` / `{{#rustdoc_include ...}}` directive must live inside a
+   checked fence and target a registered verified artifact of a `case.json`
+   under `book/examples/`. All other unescaped `{{#...}}` directives are
+   rejected. After `mdbook build`, every rendered `<pre><code class="language-*">`
+   block in authored chapters is also verified against the exact verified
+   artifact texts, structurally closing CommonMark parser-desync bypasses.
 3. Fail-closed anchor and hidden-spec checks: `mdbook v0.5.4` silently exits 0
    with an empty code block on missing `{{#include file:anchor}}` anchors. This
    script parses every include directive itself and rejects missing files,
@@ -111,7 +111,17 @@ ALLOWED_MDBOOK_THEMES = frozenset({"light", "rust", "coal", "navy", "ayu"})
 ALLOWED_EXAMPLE_SUFFIXES = frozenset({".json", ".txt", ".rs", ".lock"})
 
 CHECKED_FENCE_LANGS = frozenset(
-    {"rust", "rs", "sh", "bash", "shell", "zsh", "console"}
+    {
+        "rust",
+        "rs",
+        "sh",
+        "bash",
+        "shell",
+        "zsh",
+        "console",
+        "lean",
+        "json",
+    }
 )
 STRICT_CHAPTER_DIRS = frozenset({"getting-started", "guides", "reference"})
 
@@ -600,6 +610,541 @@ def _validate_cli_argv_allowlist(
     )
 
 
+TUTOR_FORBIDDEN_FLAGS = frozenset(
+    {
+        "--allow-unpinned-lean",
+        "--allow-unsandboxed-elaboration",
+        "--allow-sorry-in-proof",
+        "--no-cache",
+        "--no-rebuild-bundled",
+        "--manifest-path",
+        "--local-archive",
+        "--capture",
+        "--sysroot",
+        "--lean",
+        "--export-lean-lib",
+    }
+)
+TUTOR_ALLOWED_RUSTC_VALUE_FLAGS = frozenset(
+    {
+        "--crate-name",
+        "--crate-type",
+        "--panic",
+        "--edition",
+        "--target",
+        "--cfg",
+        "--env",
+        "--source-file",
+        "--spec-file",
+        "--proof-file",
+        "--spec-decl",
+        "--theorem",
+        "--select",
+        "--artifacts",
+        "--lean-memory-mb",
+    }
+)
+ALLOWED_SANDBOXES = frozenset({"linux_bwrap", "linux_landlock_seccomp"})
+ALLOWED_TUTOR_RECEIPT_STATUSES = frozenset(
+    {
+        "selected_unit_verified",
+        "crate_verified",
+        "proof_failed",
+        "unsupported",
+        "tool_failed",
+    }
+)
+VERIFIED_TUTOR_STATUSES = frozenset({"selected_unit_verified", "crate_verified"})
+TUTOR_SINGLE_VALUE_FLAGS = frozenset(
+    {
+        "--crate-name",
+        "--crate-type",
+        "--panic",
+        "--edition",
+        "--target",
+        "--spec-decl",
+        "--theorem",
+        "--request",
+        "--artifacts",
+        "--lean-memory-mb",
+    }
+)
+MAX_TUTOR_LEAN_MEMORY_MB = 65536
+
+
+def _is_safe_relative_workpath(raw: str) -> bool:
+    """Return True if `raw` is a clean relative workspace path."""
+    if not raw or not isinstance(raw, str) or raw.startswith(("/", "~")):
+        return False
+    if "\\" in raw or any(seg in ("", ".", "..") for seg in raw.split("/")):
+        return False
+    p = Path(raw)
+    if p.is_absolute() or not p.parts:
+        return False
+    if any(part in ("", ".", "..") for part in p.parts):
+        return False
+    name_l = p.name.lower()
+    if name_l in {"cargo.toml", "cargo.lock"} or p.suffix.lower() in {".py", ".sh"}:
+        return False
+    return True
+
+
+def _validate_lean_memory_mb(val: str) -> str | None:
+    """Validate bounded `--lean-memory-mb` integer string."""
+    if not re.fullmatch(r"[0-9]+", val):
+        return f"--lean-memory-mb must be an integer, got {val!r}"
+    mem_mb = int(val)
+    if mem_mb < 4096 or mem_mb > MAX_TUTOR_LEAN_MEMORY_MB:
+        return (
+            f"--lean-memory-mb must be in 4096..{MAX_TUTOR_LEAN_MEMORY_MB}, "
+            f"got {val!r}"
+        )
+    return None
+
+
+def _validate_tutor_argv(argv: list[str]) -> str | None:
+    """Validate a strict allowlist of offline/sandboxed tutor `cargo-anneal` cmds."""
+    if not argv or argv[0] != "anneal":
+        return f"tutor step argv must start with 'anneal': {argv!r}"
+    args = argv[1:]
+    for arg in argv:
+        if _arg_contains_unsafe_path(arg):
+            return f"tutor argv may not contain unsafe path: {arg!r}"
+        flag = arg.split("=", 1)[0]
+        if flag in TUTOR_FORBIDDEN_FLAGS:
+            return f"tutor argv forbids flag {flag!r}: {argv!r}"
+
+    if args[:2] == ["init", "--standalone"]:
+        rest = args[2:]
+        if not rest:
+            return None
+        if (
+            len(rest) == 2
+            and rest[0] == "--proof-dir"
+            and _is_safe_relative_workpath(rest[1])
+        ):
+            return None
+        return f"unsupported tutor `init` argv shape: {argv!r}"
+
+    if args and args[0] == "verify":
+        rest = args[1:]
+        seen_single: set[str] = set()
+        if rest and rest[0] == "rustc":
+            if (
+                len(rest) < 2
+                or rest[1].startswith("-")
+                or not _is_safe_relative_workpath(rest[1])
+            ):
+                return f"tutor `verify rustc` requires relative crate root: {argv!r}"
+            idx = 2
+            has_spec = False
+            has_proof = False
+            while idx < len(rest):
+                flag = rest[idx]
+                if flag not in TUTOR_ALLOWED_RUSTC_VALUE_FLAGS:
+                    return (
+                        f"unsupported flag {flag!r} in tutor `verify rustc`: {argv!r}"
+                    )
+                if flag in TUTOR_SINGLE_VALUE_FLAGS:
+                    if flag in seen_single:
+                        return f"duplicate {flag!r} in tutor `verify rustc`: {argv!r}"
+                    seen_single.add(flag)
+                if idx + 1 >= len(rest):
+                    return (
+                        f"missing value for {flag!r} in tutor `verify rustc`: {argv!r}"
+                    )
+                val = rest[idx + 1]
+                if flag == "--edition" and val not in {"2015", "2018", "2021", "2024"}:
+                    return f"unsupported edition {val!r} in tutor `verify rustc`"
+                if flag == "--target" and val != "x86_64-unknown-linux-gnu":
+                    return f"unsupported target {val!r} in tutor `verify rustc`"
+                if flag == "--crate-type" and val not in {"lib", "bin"}:
+                    return f"unsupported crate-type {val!r} in tutor `verify rustc`"
+                if flag == "--panic" and val not in {"unwind", "abort"}:
+                    return f"unsupported panic {val!r} in tutor `verify rustc`"
+                if flag in {"--source-file", "--artifacts"}:
+                    if not _is_safe_relative_workpath(val):
+                        return f"invalid relative path {val!r} for {flag!r}"
+                if flag in {"--spec-file", "--proof-file"}:
+                    if "=" not in val:
+                        return f"{flag!r} expects MOD=PATH, got {val!r}"
+                    _mod, path_val = val.split("=", 1)
+                    if not _mod or not _is_safe_relative_workpath(path_val):
+                        return f"invalid {flag!r} mapping: {val!r}"
+                    if flag == "--spec-file":
+                        has_spec = True
+                    else:
+                        has_proof = True
+                if flag == "--lean-memory-mb":
+                    mem_err = _validate_lean_memory_mb(val)
+                    if mem_err:
+                        return mem_err
+                idx += 2
+            if not (has_spec and has_proof):
+                return (
+                    f"tutor `verify rustc` requires --spec-file and --proof-file: "
+                    f"{argv!r}"
+                )
+            return None
+
+        idx = 0
+        has_request = False
+        while idx < len(rest):
+            flag = rest[idx]
+            if flag not in {"--request", "--artifacts", "--lean-memory-mb"}:
+                return f"unsupported flag {flag!r} in tutor `verify`: {argv!r}"
+            if flag in seen_single:
+                return f"duplicate {flag!r} in tutor `verify`: {argv!r}"
+            seen_single.add(flag)
+            if idx + 1 >= len(rest):
+                return f"missing value for {flag!r} in tutor `verify`: {argv!r}"
+            val = rest[idx + 1]
+            if flag in {"--request", "--artifacts"}:
+                if not _is_safe_relative_workpath(val):
+                    return f"invalid relative path {val!r} for {flag!r}"
+            if flag == "--request":
+                has_request = True
+            if flag == "--lean-memory-mb":
+                mem_err = _validate_lean_memory_mb(val)
+                if mem_err:
+                    return mem_err
+            idx += 2
+        if not has_request:
+            return f"tutor `verify` requires --request: {argv!r}"
+        return None
+
+    return f"argv {argv!r} is outside the closed tutor CLI allowlist"
+
+
+def _resolve_case_artifact(
+    case_file: Path, rel_str: str, *, allow_missing: bool = False
+) -> tuple[Path | None, str | None]:
+    """Validate and resolve a relative artifact path inside `case_file.parent`."""
+    if not isinstance(rel_str, str) or not rel_str:
+        return None, f"invalid artifact path: {rel_str!r}"
+    if "\\" in rel_str or any(seg in ("", ".", "..") for seg in rel_str.split("/")):
+        return None, f"invalid artifact path: {rel_str!r}"
+    p = Path(rel_str)
+    if p.is_absolute() or ".." in p.parts:
+        return None, f"artifact path escapes case directory: {rel_str!r}"
+    raw = case_file.parent / rel_str
+    if _has_symlink_component(raw, case_file.parent):
+        return None, f"artifact path traverses symlink: {rel_str!r}"
+    resolved = raw.resolve()
+    if resolved == case_file.resolve():
+        return None, f"artifact path cannot refer to case.json: {rel_str!r}"
+    if not _is_within(resolved, case_file.parent):
+        return None, f"artifact escapes case directory: {rel_str!r}"
+    if not allow_missing and not resolved.is_file():
+        return None, f"missing artifact file: {resolved}"
+    return resolved, None
+
+
+def _validate_expect_receipt_spec(
+    case_file: Path, idx: int, exp_r: object, allowed_keys: set[str]
+) -> list[str]:
+    """Type- and value-check a step's `expect_receipt` expectations."""
+    errors: list[str] = []
+    if not isinstance(exp_r, dict):
+        return [f"{case_file}: step[{idx}] `expect_receipt` must be an object"]
+    unknown_r = set(exp_r.keys()) - allowed_keys
+    if unknown_r:
+        errors.append(
+            f"{case_file}: step[{idx}] unknown `expect_receipt` keys: "
+            f"{sorted(unknown_r)}"
+        )
+    if "schema_version" in exp_r:
+        sv = exp_r["schema_version"]
+        if isinstance(sv, bool) or sv != 3:
+            errors.append(
+                f"{case_file}: step[{idx}] `expect_receipt.schema_version` must be 3"
+            )
+    if "status" in exp_r:
+        st = exp_r["status"]
+        if not isinstance(st, str) or st not in ALLOWED_TUTOR_RECEIPT_STATUSES:
+            errors.append(
+                f"{case_file}: step[{idx}] invalid `expect_receipt.status` {st!r}"
+            )
+    if "experimental" in exp_r and not isinstance(exp_r["experimental"], bool):
+        errors.append(
+            f"{case_file}: step[{idx}] `expect_receipt.experimental` must be bool"
+        )
+    if "elaboration_sandbox_in" in exp_r:
+        sbx_list = exp_r["elaboration_sandbox_in"]
+        if (
+            not isinstance(sbx_list, list)
+            or not sbx_list
+            or not all(isinstance(x, str) and x in ALLOWED_SANDBOXES for x in sbx_list)
+        ):
+            errors.append(
+                f"{case_file}: step[{idx}] `elaboration_sandbox_in` must be non-empty "
+                f"subset of {sorted(ALLOWED_SANDBOXES)}"
+            )
+    for str_key in ("phase", "hint_contains", "detail_contains", "stderr_contains"):
+        if str_key in exp_r:
+            val = exp_r[str_key]
+            if not isinstance(val, str) or not val:
+                errors.append(
+                    f"{case_file}: step[{idx}] `expect_receipt.{str_key}` must be "
+                    f"non-empty string"
+                )
+    if "spec_warnings" in exp_r and not isinstance(exp_r["spec_warnings"], list):
+        errors.append(
+            f"{case_file}: step[{idx}] `expect_receipt.spec_warnings` must be a list"
+        )
+    for list_key in ("assumptions", "deferred", "selected_paths"):
+        if list_key in exp_r:
+            vals = exp_r[list_key]
+            if not isinstance(vals, list) or not all(isinstance(x, str) for x in vals):
+                errors.append(
+                    f"{case_file}: step[{idx}] `expect_receipt.{list_key}` must be "
+                    f"list of strings"
+                )
+    if "scope" in exp_r and not isinstance(exp_r["scope"], dict):
+        errors.append(
+            f"{case_file}: step[{idx}] `expect_receipt.scope` must be an object"
+        )
+    return errors
+
+
+def _validate_tutor_case(
+    case_file: Path, data: dict
+) -> tuple[set[Path], list[str]]:
+    """Validate a `"kind": "tutor"` workflow case and return registered artifacts."""
+    errors: list[str] = []
+    verified: set[Path] = set()
+    allowed_keys = {"kind", "description", "artifacts", "steps"}
+    unknown = set(data.keys()) - allowed_keys
+    if unknown:
+        errors.append(f"{case_file}: unknown fields in tutor case: {sorted(unknown)}")
+    for req in ("description", "artifacts", "steps"):
+        if req not in data:
+            errors.append(f"{case_file}: missing required field `{req}`")
+
+    artifacts = data.get("artifacts")
+    declared_paths: set[Path] = set()
+    copy_sources: set[Path] = set()
+    output_paths: set[Path] = set()
+    seen_stage_as: set[str] = set()
+    seen_workdir_paths: set[str] = set()
+    role_allowed_keys = {
+        "input": {"file", "role", "stage_as"},
+        "generated": {"file", "role", "workdir_path"},
+        "mutation_source": {"file", "role"},
+    }
+    if not isinstance(artifacts, list) or not artifacts:
+        errors.append(f"{case_file}: `artifacts` must be a non-empty list")
+    else:
+        for entry in artifacts:
+            if not isinstance(entry, dict):
+                errors.append(f"{case_file}: each artifact entry must be an object")
+                continue
+            rel_file = entry.get("file")
+            role = entry.get("role")
+            if role not in role_allowed_keys:
+                errors.append(f"{case_file}: invalid artifact role {role!r}")
+                continue
+            unknown_art = set(entry.keys()) - role_allowed_keys[role]
+            if unknown_art:
+                errors.append(
+                    f"{case_file}: invalid keys for role {role!r}: "
+                    f"{sorted(unknown_art)}"
+                )
+            resolved, err = _resolve_case_artifact(case_file, rel_file)
+            if err:
+                errors.append(f"{case_file}: {err}")
+            elif resolved is not None:
+                if resolved in declared_paths:
+                    errors.append(f"{case_file}: duplicate artifact file {rel_file!r}")
+                declared_paths.add(resolved)
+                verified.add(resolved)
+                if role in {"input", "mutation_source"}:
+                    copy_sources.add(resolved)
+                if role == "generated":
+                    output_paths.add(resolved)
+            if role == "input":
+                stage_as = entry.get("stage_as")
+                if not isinstance(stage_as, str) or not _is_safe_relative_workpath(
+                    stage_as
+                ):
+                    errors.append(f"{case_file}: invalid `stage_as` path {stage_as!r}")
+                elif stage_as in seen_stage_as:
+                    errors.append(
+                        f"{case_file}: duplicate `stage_as` target {stage_as!r}"
+                    )
+                else:
+                    seen_stage_as.add(stage_as)
+            elif role == "generated":
+                wd_path = entry.get("workdir_path")
+                if not isinstance(wd_path, str) or not _is_safe_relative_workpath(
+                    wd_path
+                ):
+                    errors.append(f"{case_file}: invalid `workdir_path` {wd_path!r}")
+                elif wd_path in seen_workdir_paths:
+                    errors.append(
+                        f"{case_file}: duplicate `workdir_path` target {wd_path!r}"
+                    )
+                else:
+                    seen_workdir_paths.add(wd_path)
+
+    steps = data.get("steps")
+    allowed_expect_receipt_keys = {
+        "schema_version",
+        "status",
+        "experimental",
+        "elaboration_sandbox_in",
+        "phase",
+        "spec_warnings",
+        "scope",
+        "assumptions",
+        "deferred",
+        "selected_paths",
+        "hint_contains",
+        "detail_contains",
+        "stderr_contains",
+    }
+    if not isinstance(steps, list) or not steps:
+        errors.append(f"{case_file}: `steps` must be a non-empty list")
+    else:
+        allowed_step_keys = {
+            "display_command",
+            "argv",
+            "expect_exit",
+            "copy_files",
+            "expect_receipt",
+            "transcript",
+            "receipt_excerpt",
+            "output_mode",
+        }
+        for idx, step in enumerate(steps):
+            if not isinstance(step, dict):
+                errors.append(f"{case_file}: step[{idx}] must be an object")
+                continue
+            unknown_s = set(step.keys()) - allowed_step_keys
+            if unknown_s:
+                errors.append(
+                    f"{case_file}: step[{idx}] unknown keys: {sorted(unknown_s)}"
+                )
+            argv = step.get("argv")
+            argv_ok = isinstance(argv, list) and all(isinstance(a, str) for a in argv)
+            if not argv_ok:
+                errors.append(
+                    f"{case_file}: step[{idx}] `argv` must be list of strings"
+                )
+            else:
+                allow_err = _validate_tutor_argv(argv)
+                if allow_err:
+                    errors.append(f"{case_file}: step[{idx}] {allow_err}")
+            display_cmd = step.get("display_command")
+            if not isinstance(display_cmd, str) or not display_cmd.startswith("$ "):
+                errors.append(
+                    f"{case_file}: step[{idx}] `display_command` must start with `$ `"
+                )
+            elif argv_ok and not _display_command_matches_argv(display_cmd, argv):
+                errors.append(
+                    f"{case_file}: step[{idx}] `display_command` mismatches `argv`"
+                )
+            expect_exit = step.get("expect_exit")
+            if isinstance(expect_exit, bool) or not isinstance(expect_exit, int):
+                errors.append(f"{case_file}: step[{idx}] `expect_exit` must be an int")
+
+            output_mode = step.get("output_mode")
+            if output_mode is not None and output_mode not in {
+                "full",
+                "receipt_summary",
+            }:
+                errors.append(
+                    f"{case_file}: step[{idx}] invalid `output_mode` {output_mode!r}"
+                )
+
+            exp_r = step.get("expect_receipt")
+            if exp_r is not None:
+                errors.extend(
+                    _validate_expect_receipt_spec(
+                        case_file, idx, exp_r, allowed_expect_receipt_keys
+                    )
+                )
+            if argv_ok and len(argv) >= 2 and argv[1] == "verify":
+                if not isinstance(exp_r, dict) or not exp_r.get("status"):
+                    errors.append(
+                        f"{case_file}: step[{idx}] `verify` requires "
+                        f"`expect_receipt.status`"
+                    )
+            if "receipt_excerpt" in step and exp_r is None:
+                errors.append(
+                    f"{case_file}: step[{idx}] `receipt_excerpt` requires "
+                    f"`expect_receipt`"
+                )
+            if output_mode == "receipt_summary" and exp_r is None:
+                errors.append(
+                    f"{case_file}: step[{idx}] `output_mode` 'receipt_summary' "
+                    f"requires `expect_receipt`"
+                )
+
+            copy_files = step.get("copy_files") or []
+            if not isinstance(copy_files, list):
+                errors.append(f"{case_file}: step[{idx}] `copy_files` must be a list")
+            else:
+                for cp_entry in copy_files:
+                    if not isinstance(cp_entry, dict):
+                        errors.append(
+                            f"{case_file}: step[{idx}] invalid `copy_files` item"
+                        )
+                        continue
+                    src = cp_entry.get("src")
+                    dest = cp_entry.get("dest")
+                    src_res, src_err = _resolve_case_artifact(case_file, src)
+                    if src_err or src_res is None or src_res not in copy_sources:
+                        errors.append(
+                            f"{case_file}: step[{idx}] unregistered copy src {src!r}"
+                        )
+                    if (
+                        not isinstance(dest, str)
+                        or not _is_safe_relative_workpath(dest)
+                    ):
+                        errors.append(
+                            f"{case_file}: step[{idx}] invalid copy dest {dest!r}"
+                        )
+                    elif idx == 0 and dest in seen_workdir_paths:
+                        errors.append(
+                            f"{case_file}: step[0] copy dest {dest!r} cannot mutate "
+                            f"a generated path before an earlier step creates it"
+                        )
+
+            has_output = False
+            for out_key in ("transcript", "receipt_excerpt"):
+                if out_key in step:
+                    has_output = True
+                    out_rel = step[out_key]
+                    resolved, err = _resolve_case_artifact(case_file, out_rel)
+                    if err:
+                        errors.append(f"{case_file}: step[{idx}] {out_key}: {err}")
+                    elif resolved is not None:
+                        if resolved in declared_paths or resolved in output_paths:
+                            errors.append(
+                                f"{case_file}: step[{idx}] {out_key} collides with "
+                                f"existing artifact {out_rel!r}"
+                            )
+                        output_paths.add(resolved)
+                        verified.add(resolved)
+            if not has_output and "expect_receipt" not in step:
+                errors.append(
+                    f"{case_file}: step[{idx}] must verify at least one output or "
+                    f"receipt"
+                )
+
+    case_dir = case_file.parent.resolve()
+    for p in sorted(case_dir.rglob("*")):
+        if p.is_dir() or p.resolve() == case_file.resolve():
+            continue
+        if p.resolve() not in verified:
+            rel = p.relative_to(case_dir)
+            errors.append(
+                f"{case_file}: undeclared regular file in tutor directory: {rel}"
+            )
+    return verified, errors
+
+
 def _load_example_cases(
     examples_root: Path,
 ) -> tuple[list[tuple[Path, dict, set[Path]]], list[str]]:
@@ -640,6 +1185,11 @@ def _load_example_cases(
             errors.append(f"{case_file}: root JSON value must be an object")
             continue
         kind = data.get("kind")
+        if kind == "tutor":
+            verified_artifacts, tutor_errors = _validate_tutor_case(case_file, data)
+            errors.extend(tutor_errors)
+            cases.append((case_file, data, verified_artifacts))
+            continue
         if kind != "cli":
             errors.append(f"{case_file}: unsupported example kind: {kind!r}")
             continue
@@ -1557,11 +2107,430 @@ def _run_cli_case(
     return errors
 
 
+def _normalize_output_paths(
+    text: str, work_dir: Path, work_resolved: Path, tmp_dir: Path
+) -> str:
+    """Replace temporary workspace and staging paths with deterministic tags."""
+    out = (
+        text.replace(str(work_resolved), "<WORKDIR>")
+        .replace(str(work_dir), "<WORKDIR>")
+        .replace(str(tmp_dir.resolve()), "<TMPDIR>")
+        .replace(str(tmp_dir), "<TMPDIR>")
+    )
+    out = re.sub(
+        r"/tmp/anneal-verification-[A-Za-z0-9]+", "<ANNEAL_STAGE_DIR>", out
+    )
+    return out
+
+
+def _assert_and_summarize_receipt(
+    stdout: str,
+    stderr: str,
+    expect_receipt: dict,
+    case_file: Path,
+    step_idx: int,
+    work_dir: Path,
+    work_resolved: Path,
+    tmp_dir: Path,
+) -> tuple[dict | None, list[str]]:
+    """Validate live Receipt v3 invariants and build a deterministic summary dict."""
+    errors: list[str] = []
+    try:
+        receipt = json.loads(stdout)
+    except json.JSONDecodeError as exc:
+        return None, [
+            f"{case_file}: step[{step_idx}] invalid Receipt JSON on stdout: "
+            f"{exc}\nstdout={stdout!r}\nstderr={stderr!r}"
+        ]
+    if not isinstance(receipt, dict):
+        return None, [f"{case_file}: step[{step_idx}] receipt is not a JSON object"]
+
+    expected_sv = expect_receipt.get("schema_version", 3)
+    if receipt.get("schema_version") != expected_sv:
+        errors.append(
+            f"{case_file}: step[{step_idx}] wrong schema_version: "
+            f"{receipt.get('schema_version')!r}"
+        )
+    if receipt.get("status") != expect_receipt["status"]:
+        errors.append(
+            f"{case_file}: step[{step_idx}] expected status "
+            f"{expect_receipt['status']!r}, got {receipt.get('status')!r} "
+            f"(hint={receipt.get('hint')!r})"
+        )
+    if "tainted" in receipt or receipt.get("taint_reasons") != []:
+        errors.append(
+            f"{case_file}: step[{step_idx}] unexpected taint in receipt: "
+            f"taint_reasons={receipt.get('taint_reasons')!r}"
+        )
+    req_sbx = expect_receipt.get("elaboration_sandbox_in", ALLOWED_SANDBOXES)
+    allowed_sbx = set(req_sbx) & ALLOWED_SANDBOXES
+    if receipt.get("elaboration_sandbox") not in allowed_sbx:
+        errors.append(
+            f"{case_file}: step[{step_idx}] unexpected sandbox "
+            f"{receipt.get('elaboration_sandbox')!r}"
+        )
+    for key in (
+        "experimental",
+        "phase",
+        "spec_warnings",
+        "scope",
+        "assumptions",
+        "deferred",
+    ):
+        if key in expect_receipt and receipt.get(key) != expect_receipt[key]:
+            errors.append(
+                f"{case_file}: step[{step_idx}] mismatch for `{key}`: "
+                f"expected {expect_receipt[key]!r}, got {receipt.get(key)!r}"
+            )
+    if "selected_paths" in expect_receipt:
+        actual_paths = [item.get("path") for item in (receipt.get("selected") or [])]
+        if actual_paths != expect_receipt["selected_paths"]:
+            errors.append(
+                f"{case_file}: step[{step_idx}] mismatch for `selected` paths: "
+                f"expected {expect_receipt['selected_paths']!r}, got {actual_paths!r}"
+            )
+    if "hint_contains" in expect_receipt:
+        hint = receipt.get("hint") or ""
+        if expect_receipt["hint_contains"] not in hint:
+            errors.append(
+                f"{case_file}: step[{step_idx}] missing hint substring "
+                f"{expect_receipt['hint_contains']!r} in {hint!r}"
+            )
+    if "detail_contains" in expect_receipt:
+        detail = receipt.get("detail") or ""
+        if expect_receipt["detail_contains"] not in detail:
+            errors.append(
+                f"{case_file}: step[{step_idx}] missing detail substring "
+                f"{expect_receipt['detail_contains']!r} in {detail!r}"
+            )
+    if "stderr_contains" in expect_receipt:
+        if expect_receipt["stderr_contains"] not in stderr:
+            errors.append(
+                f"{case_file}: step[{step_idx}] missing stderr substring "
+                f"{expect_receipt['stderr_contains']!r} in {stderr!r}"
+            )
+
+    summary: dict = {
+        "schema_version": receipt.get("schema_version"),
+        "status": receipt.get("status"),
+    }
+    sbx_summary = "<linux_bwrap | linux_landlock_seccomp>"
+    actual_status = receipt.get("status")
+    if isinstance(actual_status, str) and actual_status in VERIFIED_TUTOR_STATUSES:
+        for field in (
+            "experimental",
+            "elaboration_sandbox",
+            "taint_reasons",
+            "spec_warnings",
+            "scope",
+            "selected",
+            "assumptions",
+            "deferred",
+        ):
+            if field == "elaboration_sandbox" and field in receipt:
+                summary[field] = sbx_summary
+            elif field in receipt:
+                summary[field] = receipt[field]
+    else:
+        for field in ("phase", "elaboration_sandbox", "taint_reasons"):
+            if field == "elaboration_sandbox" and field in receipt:
+                summary[field] = sbx_summary
+            elif field in receipt:
+                summary[field] = receipt[field]
+        if receipt.get("hint"):
+            summary["hint"] = _normalize_output_paths(
+                str(receipt["hint"]), work_dir, work_resolved, tmp_dir
+            )
+    return summary, errors
+
+
+def _compare_or_bless(
+    target_path: Path, actual_text: str, bless: bool, label: str
+) -> list[str]:
+    """Verify `actual_text` matches `target_path` or overwrite when `bless=True`."""
+    if bless:
+        target_path.write_text(actual_text, encoding="utf-8")
+        return []
+    expected_text = target_path.read_text(encoding="utf-8")
+    if actual_text != expected_text:
+        diff = "".join(
+            difflib.unified_diff(
+                expected_text.splitlines(keepends=True),
+                actual_text.splitlines(keepends=True),
+                fromfile=str(target_path),
+                tofile=f"<live {label}>",
+            )
+        )
+        return [
+            f"{target_path}: output mismatch (re-run with `--bless` if "
+            f"intentional):\n{diff}"
+        ]
+    return []
+
+
+def _inject_tutor_toolchain(
+    argv: list[str],
+    capture: Path | None,
+    sysroot: Path | None,
+    lean: Path | None,
+) -> list[str]:
+    """Inject explicit `--capture`/`--sysroot`/`--lean` into `verify` invocations."""
+    if len(argv) >= 2 and argv[1] == "verify" and capture and sysroot and lean:
+        return [
+            argv[0],
+            argv[1],
+            "--capture",
+            str(capture),
+            "--sysroot",
+            str(sysroot),
+            "--lean",
+            str(lean),
+            *argv[2:],
+        ]
+    return list(argv)
+
+
+def _run_tutor_case(
+    case_file: Path,
+    data: dict,
+    cargo_anneal: Path,
+    *,
+    session_cache: Path,
+    host_xdg_cache: str | None,
+    capture: Path | None,
+    sysroot: Path | None,
+    lean: Path | None,
+    bless: bool,
+) -> list[str]:
+    """Execute a multi-step isolated `"kind": "tutor"` verification scenario."""
+    errors: list[str] = []
+    with tempfile.TemporaryDirectory(prefix="anneal-doc-tutor-") as tmp_str:
+        tmp = Path(tmp_str)
+        work_dir = tmp / "work"
+        work_dir.mkdir()
+        work_resolved = work_dir.resolve()
+        home_dir = tmp / "home"
+        home_dir.mkdir()
+
+        for art in data["artifacts"]:
+            if art["role"] != "input":
+                continue
+            src = case_file.parent / art["file"]
+            raw_dest = work_dir / art["stage_as"]
+            if _has_symlink_component(raw_dest, work_dir):
+                return [f"{case_file}: stage_as traverses symlink: {art['stage_as']!r}"]
+            dest = raw_dest.resolve()
+            if not _is_within(dest, work_dir):
+                return [f"{case_file}: invalid stage_as {art['stage_as']!r}"]
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(src, dest)
+
+        env = {
+            "PATH": os.environ.get("PATH", ""),
+            "HOME": str(home_dir),
+            "TMPDIR": str(tmp),
+            "TERM": "dumb",
+            "NO_COLOR": "1",
+        }
+        if any((capture, sysroot, lean)) and not all((capture, sysroot, lean)):
+            return [
+                f"{case_file}: partial explicit toolchain overrides; pass all "
+                f"three of capture/sysroot/lean or none"
+            ]
+        has_installed_bundle = bool(
+            host_xdg_cache
+            and (Path(host_xdg_cache) / "anneal" / "toolchain").is_dir()
+        )
+        use_explicit_tools = bool(capture and sysroot and lean)
+        if use_explicit_tools:
+            env["XDG_CACHE_HOME"] = str(session_cache)
+        elif has_installed_bundle and host_xdg_cache:
+            env["XDG_CACHE_HOME"] = host_xdg_cache
+        else:
+            env["XDG_CACHE_HOME"] = str(session_cache)
+
+        checked_generated: set[str] = set()
+
+        def _check_generated(targets: set[str] | None = None) -> list[str]:
+            gen_errs: list[str] = []
+            for art in data["artifacts"]:
+                if art["role"] != "generated":
+                    continue
+                wd_rel = art["workdir_path"]
+                if wd_rel in checked_generated:
+                    continue
+                if targets is not None and wd_rel not in targets:
+                    continue
+                raw_gen = work_dir / wd_rel
+                if _has_symlink_component(raw_gen, work_dir):
+                    gen_errs.append(
+                        f"{case_file}: generated file traverses symlink: {wd_rel!r}"
+                    )
+                    checked_generated.add(wd_rel)
+                    continue
+                gen_path = raw_gen.resolve()
+                if not _is_within(gen_path, work_dir) or not gen_path.is_file():
+                    gen_errs.append(
+                        f"{case_file}: missing generated workdir file {wd_rel!r}"
+                    )
+                    checked_generated.add(wd_rel)
+                    continue
+                gen_text = gen_path.read_text(encoding="utf-8")
+                gen_errs.extend(
+                    _compare_or_bless(
+                        case_file.parent / art["file"],
+                        gen_text,
+                        bless,
+                        f"generated {wd_rel}",
+                    )
+                )
+                checked_generated.add(wd_rel)
+            return gen_errs
+
+        generated_wd_paths = {
+            art["workdir_path"]
+            for art in data["artifacts"]
+            if art["role"] == "generated"
+        }
+
+        for step_idx, step in enumerate(data["steps"]):
+            copy_entries = step.get("copy_files") or []
+            overwritten_generated = {
+                cp_entry["dest"]
+                for cp_entry in copy_entries
+                if cp_entry["dest"] in generated_wd_paths
+                and cp_entry["dest"] not in checked_generated
+            }
+            if overwritten_generated:
+                snap_errs = _check_generated(overwritten_generated)
+                if snap_errs:
+                    return snap_errs
+            for cp_entry in copy_entries:
+                src = case_file.parent / cp_entry["src"]
+                raw_dest = work_dir / cp_entry["dest"]
+                if _has_symlink_component(raw_dest, work_dir):
+                    return [
+                        f"{case_file}: copy dest traverses symlink: "
+                        f"{cp_entry['dest']!r}"
+                    ]
+                dest = raw_dest.resolve()
+                if not _is_within(dest, work_dir):
+                    return [f"{case_file}: invalid copy dest {cp_entry['dest']!r}"]
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(src, dest)
+
+            argv = step["argv"]
+            if (
+                len(argv) >= 2
+                and argv[1] == "verify"
+                and not (use_explicit_tools or has_installed_bundle)
+            ):
+                return [
+                    f"{case_file}: step[{step_idx}] `verify` requires --capture/"
+                    f"--sysroot/--lean (or installed XDG_CACHE_HOME toolchain)"
+                ]
+
+            exec_argv = (
+                _inject_tutor_toolchain(argv, capture, sysroot, lean)
+                if use_explicit_tools
+                else list(argv)
+            )
+            try:
+                proc = subprocess.run(
+                    [str(cargo_anneal), *exec_argv],
+                    cwd=work_dir,
+                    env=env,
+                    capture_output=True,
+                    text=True,
+                    timeout=240,
+                    check=False,
+                )
+            except subprocess.TimeoutExpired as exc:
+                return [
+                    f"{case_file}: step[{step_idx}] timed out after "
+                    f"{exc.timeout}s"
+                ]
+            if proc.returncode != step["expect_exit"]:
+                errors.append(
+                    f"{case_file}: step[{step_idx}] expected exit "
+                    f"{step['expect_exit']}, got {proc.returncode}\n"
+                    f"stdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+                )
+                return errors
+
+            summary = None
+            if "expect_receipt" in step:
+                summary, rec_errs = _assert_and_summarize_receipt(
+                    proc.stdout,
+                    proc.stderr,
+                    step["expect_receipt"],
+                    case_file,
+                    step_idx,
+                    work_dir,
+                    work_resolved,
+                    tmp,
+                )
+                errors.extend(rec_errs)
+                if rec_errs:
+                    return errors
+
+            if "receipt_excerpt" in step:
+                if summary is None:
+                    errors.append(
+                        f"{case_file}: step[{step_idx}] `receipt_excerpt` requires "
+                        f"`expect_receipt`"
+                    )
+                else:
+                    excerpt_text = json.dumps(summary, indent=2) + "\n"
+                    errors.extend(
+                        _compare_or_bless(
+                            case_file.parent / step["receipt_excerpt"],
+                            excerpt_text,
+                            bless,
+                            "receipt_excerpt",
+                        )
+                    )
+
+            if "transcript" in step:
+                mode = step.get("output_mode") or (
+                    "receipt_summary" if summary is not None else "full"
+                )
+                if mode == "receipt_summary":
+                    if summary is None:
+                        errors.append(
+                            f"{case_file}: step[{step_idx}] `receipt_summary` "
+                            f"requires `expect_receipt`"
+                        )
+                        return errors
+                    body = json.dumps(summary, indent=2) + "\n"
+                else:
+                    body = _normalize_output_paths(
+                        proc.stdout + proc.stderr, work_dir, work_resolved, tmp
+                    )
+                actual_transcript = f"{step['display_command']}\n{body}"
+                if not actual_transcript.endswith("\n"):
+                    actual_transcript += "\n"
+                errors.extend(
+                    _compare_or_bless(
+                        case_file.parent / step["transcript"],
+                        actual_transcript,
+                        bless,
+                        "tutor transcript",
+                    )
+                )
+
+        errors.extend(_check_generated(None))
+    return errors
+
+
 def verify_examples(
     anneal_root: Path,
     cargo_anneal: Path,
     *,
     bless: bool = False,
+    capture: Path | None = None,
+    sysroot: Path | None = None,
+    lean: Path | None = None,
 ) -> list[str]:
     """Run all auto-discovered doc examples against `cargo_anneal`."""
     cargo_anneal_resolved = cargo_anneal.resolve()
@@ -1573,15 +2542,34 @@ def verify_examples(
     if errors:
         return errors
 
-    for case_file, data, _artifacts in cases:
-        if data["kind"] == "cli":
-            errors.extend(
-                _run_cli_case(case_file, data, cargo_anneal_resolved, bless=bless)
-            )
-        else:
-            errors.append(
-                f"{case_file}: unsupported example kind: {data['kind']!r}"
-            )
+    host_xdg_cache = os.environ.get("XDG_CACHE_HOME") or None
+    with tempfile.TemporaryDirectory(prefix="anneal-doc-cache-") as cache_str:
+        session_cache = Path(cache_str)
+        for case_file, data, _artifacts in cases:
+            if data["kind"] == "cli":
+                errors.extend(
+                    _run_cli_case(
+                        case_file, data, cargo_anneal_resolved, bless=bless
+                    )
+                )
+            elif data["kind"] == "tutor":
+                errors.extend(
+                    _run_tutor_case(
+                        case_file,
+                        data,
+                        cargo_anneal_resolved,
+                        session_cache=session_cache,
+                        host_xdg_cache=host_xdg_cache,
+                        capture=capture,
+                        sysroot=sysroot,
+                        lean=lean,
+                        bless=bless,
+                    )
+                )
+            else:
+                errors.append(
+                    f"{case_file}: unsupported example kind: {data['kind']!r}"
+                )
     return errors
 
 
@@ -2125,6 +3113,21 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to the cargo-anneal binary for --verify-examples.",
     )
     parser.add_argument(
+        "--capture",
+        type=Path,
+        help="Optional anneal-rustc-capture path for tutor verify cases.",
+    )
+    parser.add_argument(
+        "--sysroot",
+        type=Path,
+        help="Optional rustc sysroot path for tutor verify cases.",
+    )
+    parser.add_argument(
+        "--lean",
+        type=Path,
+        help="Optional lean binary path for tutor verify cases.",
+    )
+    parser.add_argument(
         "--bless",
         action="store_true",
         help="Overwrite example transcripts with live --cargo-anneal output.",
@@ -2166,14 +3169,39 @@ def main(argv: list[str] | None = None) -> int:
     anneal_root = args.anneal_root.resolve()
     errors: list[str] = []
 
+    def _opt_path(cli_val: Path | None, env_key: str) -> Path | None:
+        if cli_val is not None:
+            return cli_val.resolve()
+        raw = os.environ.get(env_key, "")
+        return Path(raw).resolve() if raw else None
+
     try:
         errors.extend(check_sources(anneal_root))
         if not errors and args.verify_examples:
+            capture_path = _opt_path(args.capture, "ANNEAL_CAPTURE")
+            sysroot_path = _opt_path(args.sysroot, "ANNEAL_SYSROOT")
+            lean_path = _opt_path(args.lean, "ANNEAL_LEAN")
+            explicit_tools = (capture_path, sysroot_path, lean_path)
+            if any(explicit_tools) and not all(explicit_tools):
+                raise DocError(
+                    "specify all three of --capture/--sysroot/--lean (or "
+                    "ANNEAL_CAPTURE/ANNEAL_SYSROOT/ANNEAL_LEAN), or omit all "
+                    "three to use an installed toolchain bundle"
+                )
+            host_xdg = os.environ.get("XDG_CACHE_HOME", "")
+            has_bundle = bool(
+                host_xdg and (Path(host_xdg) / "anneal" / "toolchain").is_dir()
+            )
+            if has_bundle and not any(explicit_tools):
+                capture_path = sysroot_path = lean_path = None
             errors.extend(
                 verify_examples(
                     anneal_root,
                     args.cargo_anneal.resolve(),
                     bless=args.bless,
+                    capture=capture_path,
+                    sysroot=sysroot_path,
+                    lean=lean_path,
                 )
             )
         if not errors and args.build:
