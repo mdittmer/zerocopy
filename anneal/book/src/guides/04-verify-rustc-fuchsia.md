@@ -97,8 +97,8 @@ When wiring `cargo anneal verify rustc` into Bazel, GN, or host-test runners
 `--capture`, `--sysroot`, and `--lean` flags to `verify --request` over a
 pinned ten-file `ebpf_core` manifest):
 
-- **Explicit toolchain overrides (`--no-default-features`):** Build systems
-  that disable remote `setup` downloads (`--no-default-features`) supply
+- **Explicit toolchain overrides (builds without `setup`):** Build systems
+  that disable the default `setup` feature when compiling `cargo-anneal` supply
   `--capture`, `--sysroot`, and `--lean` explicitly. `cargo-anneal` rejects
   mismatches if `--capture` and captured `--sysroot` output fail to report
   Anneal's pinned `rustc` commit (`f8a08b688cbe`, `nightly-2026-05-31`, without
@@ -117,7 +117,8 @@ pinned ten-file `ebpf_core` manifest):
   though verified Rust crates do not embed a fixed upstream schedule inside
   source annotations—downstream integrations such as Fuchsia or Starnix align
   `--capture`, `--sysroot`, and `--lean` updates with their own roll cadence
-  against Anneal releases (or tainted local runs during compiler bring-up).
+  against Anneal releases (or `--allow-unpinned-lean` tainted local runs while
+  qualifying a new Lean build).
 
 [alpha-doc]: https://github.com/google/zerocopy/blob/main/anneal/docs/alpha.md
 [starnix-e2e]: https://github.com/google/zerocopy/blob/main/anneal/ci/verify_starnix_e2e.py

@@ -19,11 +19,12 @@ Zerocopy checkout. The archive bundles the pinned Rust and Lean toolchains,
 the compiler driver, and Anneal's Lean sources.
 
 ```sh
-cd anneal
-mkdir -p target
-nix build .#omnibus-archive --out-link target/omnibus-link
-XDG_CACHE_HOME="$(mktemp -d)" \
-  cargo run --locked -p cargo-anneal -- setup --local-archive target/omnibus-link
+# Build and install the current Anneal toolchain archive
+(cd anneal && \
+  mkdir -p target && \
+  nix build .#omnibus-archive --out-link target/omnibus-link && \
+  XDG_CACHE_HOME="$(mktemp -d)" \
+    cargo run --locked -p cargo-anneal -- setup --local-archive target/omnibus-link)
 ```
 
 The command uses a fresh cache because setup reuses an existing installation
@@ -64,8 +65,9 @@ interactive Stage 0 Tutor chapters accurate as `main` evolves:
    `static-checks` runs `python3 -B ci/check_docs.py --check-sources` on every
    Anneal PR, and `installed-smoke` runs `python3 -B ci/check_docs.py
    --check-sources --verify-examples --build` against the newly built
-   `cargo-anneal` binary, checking every `cli` and `tutor` workflow case
-   (`book/examples/guides/*`) and rendered mdBook HTML code parity.
+   `cargo-anneal` binary on `merge_group`, `push`, and heavy CI runs (`run-ci`),
+   checking every `cli` and `tutor` workflow case (`book/examples/guides/*`)
+   and rendered mdBook HTML code parity.
 2. **Deterministic surface-drift gates (`ci/docs_surface_manifest.json`):**
    `--check-sources` parses `trusted/cargo-anneal/src/{cli,init,verify}.rs`,
    Receipt Schema v3 statuses and taint atoms, `theory/bundle-manifest.json`,

@@ -8,6 +8,7 @@
 
 """Exercise current Anneal CI manifest guards and cache invariants."""
 
+import ast
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
@@ -983,7 +984,17 @@ class CiWorkflowManifestGuardTests(unittest.TestCase):
                     for s in top_wf["jobs"]["detect_changes"]["steps"]
                     if s.get("id") == "filter"
                 )
-                self.assertIn("non_anneal_prefixes", filter_run)
+                pfx_m = re.search(
+                    r"non_anneal_prefixes\s*=\s*(\([\s\S]*?\))", filter_run
+                )
+                self.assertIsNotNone(pfx_m, "missing non_anneal_prefixes tuple")
+                assert pfx_m is not None
+                parsed_prefixes = ast.literal_eval(pfx_m.group(1))
+                self.assertIsInstance(parsed_prefixes, tuple)
+                self.assertTrue(parsed_prefixes)
+                self.assertTrue(
+                    all(isinstance(p, str) for p in parsed_prefixes)
+                )
                 for protected in (
                     "anneal/book/src/guides/01-init-and-first-verify.md",
                     "anneal/skills/spec-authoring/SKILL.md",
@@ -994,14 +1005,9 @@ class CiWorkflowManifestGuardTests(unittest.TestCase):
                     self.assertFalse(
                         any(
                             protected.startswith(pfx)
-                            for pfx in (
-                                "zerocopy/",
-                                "evals/",
-                                "tools/",
-                                "maintainers/",
-                            )
+                            for pfx in parsed_prefixes
                         ),
-                        protected,
+                        (protected, parsed_prefixes),
                     )
 
 

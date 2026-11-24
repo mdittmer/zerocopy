@@ -31,7 +31,7 @@ release archive is published for your revision—pass `--local-archive <path>`
 and
 [Alpha Usage](https://github.com/google/zerocopy/blob/main/anneal/docs/alpha.md)
 on GitHub for instructions on building the archive with Nix). Builds compiled
-with `--no-default-features` omit `setup` and instead accept explicit
+without the default `setup` feature omit `setup` and instead accept explicit
 `--capture`, `--sysroot`, and `--lean` paths on `cargo anneal verify`.
 
 ## Fail-closed archive handling

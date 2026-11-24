@@ -1938,6 +1938,10 @@ class SurfaceFreshnessOracleTests(unittest.TestCase):
         (root / "ci").mkdir(parents=True)
 
         (root / "trusted/cargo-anneal/src/cli.rs").write_text(
+            "struct Cli {\n"
+            "    #[command(subcommand)]\n"
+            "    command: Option<Command>,\n"
+            "}\n"
             "enum Command {\n"
             "    #[cfg(feature = \"setup\")]\n"
             "    Setup {\n"
@@ -2229,7 +2233,149 @@ class SurfaceFreshnessOracleTests(unittest.TestCase):
                     "}\n",
                     encoding="utf-8",
                 ),
-                "unsupported #[command(flatten)]",
+                "unsupported Clap `flatten`",
+            ),
+            (
+                "unsupported_clap_flatten",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        "request: Option<PathBuf>,",
+                        "request: Option<PathBuf>,\n"
+                        "    #[clap(flatten)]\n"
+                        "    extra: ExtraArgs,",
+                    ),
+                    encoding="utf-8",
+                ),
+                "unsupported Clap `flatten`",
+            ),
+            (
+                "cli_global_flag",
+                lambda r: (r / "trusted/cargo-anneal/src/cli.rs").write_text(
+                    "struct Cli {\n"
+                    "    #[arg(long, global = true)]\n"
+                    "    verbose: bool,\n"
+                    "    #[command(subcommand)]\n"
+                    "    command: Option<Command>,\n"
+                    "}\n"
+                    "enum Command {\n"
+                    "    #[cfg(feature = \"setup\")]\n"
+                    "    Setup {\n"
+                    "        #[arg(long)]\n"
+                    "        local_archive: Option<PathBuf>,\n"
+                    "    },\n"
+                    "    Init(init::InitArgs),\n"
+                    "    Skill {\n"
+                    "        #[arg(long)]\n"
+                    "        example: bool,\n"
+                    "    },\n"
+                    "    Verify(Box<verify::VerifyArgs>),\n"
+                    "}\n",
+                    encoding="utf-8",
+                ),
+                "undocumented CLI flags ['--verbose']",
+            ),
+            (
+                "verify_subcommand_struct_variant",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        "enum VerifySubcommand { Rustc(RustcArgs) }",
+                        "enum VerifySubcommand {\n"
+                        "    Rustc(RustcArgs),\n"
+                        "    Cargo {\n"
+                        "        #[arg(long)]\n"
+                        "        cargo_flag: bool,\n"
+                        "    },\n"
+                        "}",
+                    ),
+                    encoding="utf-8",
+                ),
+                "undocumented CLI subcommands ['verify cargo']",
+            ),
+            (
+                "prefix_substring_does_not_match_token",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        "request: Option<PathBuf>,",
+                        "request: Option<PathBuf>,\n"
+                        "    #[arg(long)]\n"
+                        "    allow: bool,",
+                    ),
+                    encoding="utf-8",
+                ),
+                "undocumented CLI flags ['--allow']",
+            ),
+            (
+                "prefix_substring_does_not_satisfy_book_token",
+                lambda r: (
+                    (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                        (r / "trusted/cargo-anneal/src/verify.rs")
+                        .read_text()
+                        .replace(
+                            "request: Option<PathBuf>,",
+                            "request: Option<PathBuf>,\n"
+                            "    #[arg(long)]\n"
+                            "    allow: bool,",
+                        ),
+                        encoding="utf-8",
+                    ),
+                    (r / "ci/docs_surface_manifest.json").write_text(
+                        (r / "ci/docs_surface_manifest.json")
+                        .read_text()
+                        .replace(
+                            '"--allow-sorry-in-proof": {',
+                            '"--allow": {\n'
+                            '          "disposition": "book",\n'
+                            '          "book_pages": ["reference/cli.md"]\n'
+                            '        },\n'
+                            '        "--allow-sorry-in-proof": {',
+                        ),
+                        encoding="utf-8",
+                    ),
+                ),
+                "token `--allow` missing from rendered `reference/cli.md`",
+            ),
+            (
+                "manifest_path_traversal",
+                lambda r: (r / "ci/docs_surface_manifest.json").write_text(
+                    (r / "ci/docs_surface_manifest.json")
+                    .read_text()
+                    .replace("docs/README.md", "../outside.md"),
+                    encoding="utf-8",
+                ),
+                "escapes allowed directory",
+            ),
+            (
+                "short_rustc_prefix_rejected",
+                lambda r: (r / "ci/docs_surface_manifest.json").write_text(
+                    (r / "ci/docs_surface_manifest.json")
+                    .read_text()
+                    .replace(
+                        '"pinned_rustc_commit_prefix_len": 12',
+                        '"pinned_rustc_commit_prefix_len": 4',
+                    ),
+                    encoding="utf-8",
+                ),
+                "must be int >= 8",
+            ),
+            (
+                "scope_custom_status_suffix_detected",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        'true => "tainted_selected_unit_verified",',
+                        'true => "tainted_selected_unit_verified",\n'
+                        '            false => "crate_checked",',
+                    ),
+                    encoding="utf-8",
+                ),
+                "`receipt.verified_statuses`",
             ),
             (
                 "new_theory_module",
