@@ -1,0 +1,579 @@
+{
+  "schema_version": 1,
+  "freshness_contract": {
+    "doc": "docs/README.md",
+    "required_tokens": [
+      "ci/check_docs.py",
+      "ci/docs_surface_manifest.json",
+      "--verify-examples"
+    ]
+  },
+  "cli": {
+    "subcommands": {
+      "setup": {
+        "disposition": "book",
+        "book_pages": [
+          "getting-started/installation.md",
+          "reference/cli.md"
+        ],
+        "help_case": "examples/cli/setup-help",
+        "flags": {
+          "--local-archive": {
+            "disposition": "book",
+            "book_pages": [
+              "getting-started/installation.md",
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--clear-old": {
+            "disposition": "book",
+            "book_pages": [
+              "getting-started/installation.md",
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          }
+        }
+      },
+      "init": {
+        "disposition": "book",
+        "book_pages": [
+          "guides/01-init-and-first-verify.md",
+          "reference/cli.md"
+        ],
+        "help_case": "examples/cli/init-help",
+        "flags": {
+          "--manifest-path": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/02-specs-and-requests.md"
+            ],
+            "alpha_doc": true
+          },
+          "--proof-dir": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/01-init-and-first-verify.md"
+            ],
+            "alpha_doc": true
+          },
+          "--select": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--standalone": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/01-init-and-first-verify.md"
+            ],
+            "alpha_doc": false
+          }
+        }
+      },
+      "skill": {
+        "disposition": "book",
+        "book_pages": [
+          "reference/cli.md"
+        ],
+        "help_case": "examples/cli/skill-help",
+        "flags": {
+          "--example": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          }
+        }
+      },
+      "verify": {
+        "disposition": "book",
+        "book_pages": [
+          "reference/cli.md",
+          "guides/01-init-and-first-verify.md"
+        ],
+        "help_case": "examples/cli/verify-help",
+        "flags": {
+          "--request": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/01-init-and-first-verify.md",
+              "guides/02-specs-and-requests.md"
+            ],
+            "alpha_doc": true
+          },
+          "--manifest-path": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/02-specs-and-requests.md"
+            ],
+            "alpha_doc": true
+          },
+          "--proof-dir": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/02-specs-and-requests.md"
+            ],
+            "alpha_doc": true
+          },
+          "--panic": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--select": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--instantiate": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--capture": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--lean": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--sysroot": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--artifacts": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/01-init-and-first-verify.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--export-lean-lib": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--allow-unpinned-lean": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--allow-unsandboxed-elaboration": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--allow-sorry-in-proof": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/03-proof-scaling.md"
+            ],
+            "alpha_doc": true
+          },
+          "--lean-memory-mb": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--no-cache": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          },
+          "--no-rebuild-bundled": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          }
+        }
+      },
+      "verify rustc": {
+        "disposition": "book",
+        "book_pages": [
+          "reference/cli.md",
+          "guides/04-verify-rustc-fuchsia.md"
+        ],
+        "help_case": "examples/cli/verify-rustc-help",
+        "flags": {
+          "--crate-name": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--crate-type": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          },
+          "--panic": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--edition": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--target": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          },
+          "--cfg": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          },
+          "--env": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": false
+          },
+          "--source-file": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--spec-file": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--proof-file": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--spec-decl": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--theorem": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          },
+          "--select": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md",
+              "guides/04-verify-rustc-fuchsia.md"
+            ],
+            "alpha_doc": true
+          },
+          "--instantiate": {
+            "disposition": "book",
+            "book_pages": [
+              "reference/cli.md"
+            ],
+            "alpha_doc": true
+          }
+        }
+      }
+    }
+  },
+  "receipt": {
+    "schema_version": 3,
+    "book_pages": [
+      "reference/cli.md"
+    ],
+    "alpha_doc": true,
+    "verified_statuses": [
+      "crate_verified",
+      "selected_unit_verified"
+    ],
+    "tainted_statuses": [
+      "tainted_crate_verified",
+      "tainted_selected_unit_verified"
+    ],
+    "taint_reasons": {
+      "sorry_in_proof": {
+        "flag": "--allow-sorry-in-proof",
+        "book_pages": [
+          "reference/cli.md"
+        ],
+        "alpha_doc": true
+      },
+      "unpinned_lean": {
+        "flag": "--allow-unpinned-lean",
+        "book_pages": [
+          "reference/cli.md"
+        ],
+        "alpha_doc": true
+      },
+      "unsandboxed_elaboration": {
+        "flag": "--allow-unsandboxed-elaboration",
+        "book_pages": [
+          "reference/cli.md"
+        ],
+        "alpha_doc": true
+      }
+    }
+  },
+  "toolchain_pins": {
+    "pinned_rustc_commit_prefix_len": 12,
+    "book_pages_citing_rustc_pin": [
+      "guides/04-verify-rustc-fuchsia.md"
+    ]
+  },
+  "theory_modules": {
+    "Anneal.BitTrieLrat": {
+      "disposition": "internal_submodule",
+      "reason": "Internal proof automation support module (LRAT bit-trie solver) imported indirectly by proof libraries."
+    },
+    "Anneal.BitVec": {
+      "disposition": "public_library",
+      "book_pages": [
+        "guides/03-proof-scaling.md"
+      ],
+      "alpha_doc": true
+    },
+    "Anneal.BitVecArith": {
+      "disposition": "support_library",
+      "reason": "Supplementary bundled bitvector arithmetic lemmas; covered via theory/bundle-manifest.json reference until dedicated guide added."
+    },
+    "Anneal.ClassicalEm": {
+      "disposition": "alpha_doc",
+      "docs_pages": [
+        "docs/alpha.md"
+      ],
+      "reason": "Bundled proof helper documented in docs/alpha.md; not yet exercised in Stage 0 scalar guides."
+    },
+    "Anneal.Firewall": {
+      "disposition": "internal_submodule",
+      "reason": "Internal abstraction-firewall helper for structured proof decomposition."
+    },
+    "Anneal.InitLemmas": {
+      "disposition": "internal_submodule",
+      "reason": "Internal Lean Init bridge lemmas re-exported by top-level Anneal proof libraries."
+    },
+    "Anneal.LeBytes": {
+      "disposition": "support_library",
+      "reason": "Little-endian byte slice helper library for multi-byte proofs outside Stage 0 scalar guides."
+    },
+    "Anneal.LinearArith": {
+      "disposition": "support_library",
+      "reason": "Bundled linear-arithmetic decision helper outside Stage 0 scalar guides."
+    },
+    "Anneal.ListChunks": {
+      "disposition": "support_library",
+      "reason": "List-chunk decomposition lemmas for multi-byte proofs outside Stage 0 scalar guides."
+    },
+    "Anneal.LoopInv": {
+      "disposition": "public_library",
+      "book_pages": [
+        "guides/03-proof-scaling.md"
+      ],
+      "alpha_doc": true
+    },
+    "Anneal.MirWp": {
+      "disposition": "public_library",
+      "book_pages": [
+        "guides/01-init-and-first-verify.md",
+        "guides/02-specs-and-requests.md",
+        "guides/03-proof-scaling.md",
+        "guides/04-verify-rustc-fuchsia.md"
+      ],
+      "alpha_doc": true
+    },
+    "Anneal.MirWp.Canaries": {
+      "disposition": "internal_submodule",
+      "reason": "Internal regression canaries validating Anneal.MirWp lemma signatures."
+    },
+    "Anneal.MirWp.Core": {
+      "disposition": "internal_submodule",
+      "reason": "Internal implementation submodule re-exported by Anneal.MirWp."
+    },
+    "Anneal.MirWp.Execution": {
+      "disposition": "internal_submodule",
+      "reason": "Internal implementation submodule re-exported by Anneal.MirWp."
+    },
+    "Anneal.MirWp.Reflection": {
+      "disposition": "internal_submodule",
+      "reason": "Internal implementation submodule re-exported by Anneal.MirWp."
+    },
+    "Anneal.MirWp.Scalars": {
+      "disposition": "internal_submodule",
+      "reason": "Internal implementation submodule re-exported by Anneal.MirWp."
+    },
+    "Anneal.NatBitwise": {
+      "disposition": "internal_submodule",
+      "reason": "Internal natural-number bitwise lemmas imported by bundled proof modules."
+    },
+    "Anneal.PTree": {
+      "disposition": "internal_submodule",
+      "reason": "Internal radix/prefix-tree proof data structure support module."
+    },
+    "Anneal.SpineForce": {
+      "disposition": "internal_submodule",
+      "reason": "Internal evaluation/forcing helper for large Lean term reductions."
+    }
+  },
+  "skills": {
+    "cargo-anneal": {
+      "disposition": "user_facing",
+      "source": "trusted/cargo-anneal/skills/cargo-anneal/SKILL.md",
+      "referenced_in": [
+        "skills/README.md"
+      ]
+    },
+    "spec-authoring": {
+      "disposition": "user_facing",
+      "source": "skills/spec-authoring/SKILL.md",
+      "referenced_in": [
+        "skills/README.md",
+        "trusted/cargo-anneal/skills/cargo-anneal/SKILL.md"
+      ]
+    },
+    "proof-scaling": {
+      "disposition": "user_facing",
+      "source": "skills/proof-scaling/SKILL.md",
+      "referenced_in": [
+        "skills/README.md",
+        "trusted/cargo-anneal/skills/cargo-anneal/SKILL.md"
+      ]
+    },
+    "change-review": {
+      "disposition": "contributor_only",
+      "source": "skills/change-review/SKILL.md",
+      "referenced_in": [
+        "skills/README.md"
+      ],
+      "reason": "Contributor and reviewer change-sizing policy skill for Anneal maintainers."
+    },
+    "source-control": {
+      "disposition": "contributor_only",
+      "source": "skills/source-control/SKILL.md",
+      "referenced_in": [
+        "skills/README.md"
+      ],
+      "reason": "Repository commit, stack, and worker-quarantine skill for Anneal contributors."
+    },
+    "trust-review": {
+      "disposition": "contributor_only",
+      "source": "skills/trust-review/SKILL.md",
+      "referenced_in": [
+        "skills/README.md"
+      ],
+      "reason": "Repository trust-boundary audit skill for Anneal maintainers."
+    }
+  },
+  "tutor_guides": {
+    "01-init-and-first-verify.md": {
+      "example_dir": "examples/guides/01-standalone",
+      "covers_surfaces": [
+        "init --standalone",
+        "verify --request",
+        "Anneal.MirWp",
+        "selected_unit_verified"
+      ]
+    },
+    "02-specs-and-requests.md": {
+      "example_dir": "examples/guides/02-specs-and-requests",
+      "covers_surfaces": [
+        "verify --request",
+        "Spec.lean",
+        "spec_warnings",
+        "Anneal.MirWp"
+      ]
+    },
+    "03-proof-scaling.md": {
+      "example_dir": "examples/guides/03-proof-scaling",
+      "covers_surfaces": [
+        "Anneal.MirWp",
+        "Anneal.BitVec",
+        "Anneal.LoopInv",
+        "--allow-sorry-in-proof"
+      ]
+    },
+    "04-verify-rustc-fuchsia.md": {
+      "example_dir": "examples/guides/04-verify-rustc-fuchsia",
+      "covers_surfaces": [
+        "verify rustc",
+        "--export-lean-lib",
+        "--artifacts",
+        "--capture",
+        "--sysroot",
+        "--lean",
+        "--allow-unpinned-lean"
+      ]
+    }
+  }
+}

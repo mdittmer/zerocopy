@@ -17,7 +17,9 @@ lemmas, and factor multi-module proofs cleanly in Stage 0.
 > restricted to call-free, pointer-free scalar code (`Profile v1` on
 > `x86_64-unknown-linux-gnu`) with out-of-line `Spec.lean` and `Proof.lean`
 > modules. Complete review-surface reporting and an independent TCB audit
-> remain under active development.
+> remain under active development; see
+> [Alpha Usage](https://github.com/google/zerocopy/blob/main/anneal/docs/alpha.md)
+> for current Stage 0 limits.
 
 ## 1. Keep `Spec.lean` focused on the domain model
 

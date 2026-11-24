@@ -18,7 +18,9 @@ proof using `cargo anneal init --standalone` and `cargo anneal verify`.
 > runs depend on an intact host and human review of `Spec.lean`,
 > `request.json`, and the TCB receipt. See
 > [Installing the Toolchain](../getting-started/installation.md) to set up the
-> pinned toolchain before running these steps locally.
+> pinned toolchain before running these steps locally, and
+> [Alpha Usage](https://github.com/google/zerocopy/blob/main/anneal/docs/alpha.md)
+> for exact Stage 0 Profile v1 bounds.
 
 ## 1. Scaffold the standalone files
 

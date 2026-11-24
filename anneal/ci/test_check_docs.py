@@ -1769,5 +1769,573 @@ class TutorWorkflowTests(unittest.TestCase):
             self.assertTrue(any("timed out" in e for e in timeout_errs), timeout_errs)
 
 
+class SurfaceFreshnessOracleTests(unittest.TestCase):
+    """Negative-oracle tests for CI docs/book/Tutor surface-drift detection."""
+
+    def _make_surface_root(self, root: Path) -> Path:
+        _make_minimal_anneal_root(root)
+        (root / "book/src/getting-started").mkdir(parents=True)
+        (root / "book/src/guides").mkdir(parents=True)
+        (root / "book/examples/cli/setup-help").mkdir(parents=True)
+        (root / "book/examples/cli/init-help").mkdir(parents=True)
+        (root / "book/examples/cli/skill-help").mkdir(parents=True)
+        (root / "book/examples/cli/verify-help").mkdir(parents=True)
+        (root / "book/examples/cli/verify-rustc-help").mkdir(parents=True)
+        (root / "book/examples/guides/01-standalone").mkdir(parents=True)
+
+        (root / "book/src/index.md").write_text(
+            "# Anneal\n\n> **This is alpha software!**\n", encoding="utf-8"
+        )
+        (root / "book/src/getting-started/installation.md").write_text(
+            "# Install\n\n`setup` `--local-archive`\n", encoding="utf-8"
+        )
+        (root / "book/src/guides/01-standalone.md").write_text(
+            "# First\n\n> **This is alpha software!** See "
+            "[alpha](../../docs/alpha.md).\n\n"
+            "`init --standalone` `verify --request` `Anneal.MirWp` "
+            "`selected_unit_verified`\n",
+            encoding="utf-8",
+        )
+        (root / "book/src/reference/cli.md").write_text(
+            "# CLI\n\n`setup` `init` `skill` `verify` `verify rustc` "
+            "`schema_version: 3` `crate_verified` `selected_unit_verified` "
+            "`tainted_crate_verified` `tainted_selected_unit_verified` "
+            "`sorry_in_proof` `--allow-sorry-in-proof` "
+            "`--request` `--standalone` `--crate-name` "
+            "f8a08b688cbe nightly-2026-05-31 v4.34.1\n\n"
+            "```console\n"
+            "{{#include ../../examples/cli/help/transcript.txt}}\n"
+            "```\n",
+            encoding="utf-8",
+        )
+        cli_cases = (
+            (
+                "setup-help",
+                ["anneal", "setup", "--help"],
+                "$ cargo anneal setup --help\n--local-archive\n",
+            ),
+            (
+                "init-help",
+                ["anneal", "init", "--help"],
+                "$ cargo anneal init --help\n--standalone\n",
+            ),
+            (
+                "skill-help",
+                ["anneal", "skill", "--help"],
+                "$ cargo anneal skill --help\n",
+            ),
+            (
+                "verify-help",
+                ["anneal", "verify", "--help"],
+                "$ cargo anneal verify --help\n--request\n--allow-sorry-in-proof\n",
+            ),
+            (
+                "verify-rustc-help",
+                ["anneal", "verify", "rustc", "--help"],
+                "$ cargo anneal verify rustc --help\n--crate-name\n",
+            ),
+        )
+        for cname, argv, body in cli_cases:
+            (root / f"book/examples/cli/{cname}/case.json").write_text(
+                json.dumps(
+                    {
+                        "kind": "cli",
+                        "display_command": "$ cargo " + " ".join(argv),
+                        "argv": argv,
+                        "expect_exit": 0,
+                        "transcript": "transcript.txt",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            (root / f"book/examples/cli/{cname}/transcript.txt").write_text(
+                body, encoding="utf-8"
+            )
+        inc_lines = "\n".join(
+            (
+                f"```console\n"
+                f"{{{{#include ../../examples/cli/{cname}/transcript.txt}}}}\n```"
+            )
+            for cname in (
+                "help",
+                "setup-help",
+                "init-help",
+                "skill-help",
+                "verify-help",
+                "verify-rustc-help",
+            )
+        )
+        (root / "book/src/reference/cli.md").write_text(
+            "# CLI\n\n`setup` `init` `skill` `verify` `verify rustc` "
+            "`schema_version: 3` `crate_verified` `selected_unit_verified` "
+            "`tainted_crate_verified` `tainted_selected_unit_verified` "
+            "`sorry_in_proof` `--allow-sorry-in-proof` `--request` "
+            "`--standalone` `--crate-name` "
+            "f8a08b688cbe nightly-2026-05-31 v4.34.1\n\n"
+            + inc_lines
+            + "\n",
+            encoding="utf-8",
+        )
+        (root / "book/examples/guides/01-standalone/case.json").write_text(
+            json.dumps(
+                {
+                    "kind": "tutor",
+                    "description": "demo",
+                    "artifacts": [
+                        {
+                            "file": "gen.txt",
+                            "role": "generated",
+                            "workdir_path": "gen.txt",
+                        }
+                    ],
+                    "steps": [
+                        {
+                            "display_command": "$ cargo anneal init --standalone",
+                            "argv": ["anneal", "init", "--standalone"],
+                            "expect_exit": 0,
+                            "transcript": "t.txt",
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (root / "book/examples/guides/01-standalone/gen.txt").write_text(
+            "pub fn zero() -> u64 { 0 }\n", encoding="utf-8"
+        )
+        (root / "book/examples/guides/01-standalone/t.txt").write_text(
+            "$ cargo anneal init --standalone\n", encoding="utf-8"
+        )
+        (root / "book/src/guides/01-standalone.md").write_text(
+            "# First\n\n> **This is alpha software!** See "
+            "[alpha](../../docs/alpha.md).\n\n"
+            "`init --standalone` `verify --request` `Anneal.MirWp` "
+            "`selected_unit_verified`\n\n"
+            "```rust\n"
+            "{{#include ../../examples/guides/01-standalone/gen.txt}}\n```\n\n"
+            "```console\n"
+            "{{#include ../../examples/guides/01-standalone/t.txt}}\n```\n",
+            encoding="utf-8",
+        )
+        (root / "book/src/SUMMARY.md").write_text(
+            "# Summary\n\n"
+            "- [Intro](index.md)\n"
+            "- [Install](getting-started/installation.md)\n"
+            "- [Guide 1](guides/01-standalone.md)\n"
+            "- [CLI](reference/cli.md)\n"
+            "- [Principles](foundations/principles.md)\n"
+            "- [Threat Model](foundations/threat-model.md)\n"
+            "- [Meta-Principles](foundations/meta-principles.md)\n",
+            encoding="utf-8",
+        )
+
+        (root / "trusted/cargo-anneal/src").mkdir(parents=True)
+        (root / "trusted/cargo-anneal/skills/cargo-anneal").mkdir(parents=True)
+        (root / "trusted/lean").mkdir(parents=True)
+        (root / "theory").mkdir(parents=True)
+        (root / "skills/spec-authoring").mkdir(parents=True)
+        (root / "docs").mkdir(parents=True)
+        (root / "ci").mkdir(parents=True)
+
+        (root / "trusted/cargo-anneal/src/cli.rs").write_text(
+            "enum Command {\n"
+            "    #[cfg(feature = \"setup\")]\n"
+            "    Setup {\n"
+            "        #[arg(long)]\n"
+            "        local_archive: Option<PathBuf>,\n"
+            "    },\n"
+            "    Init(init::InitArgs),\n"
+            "    Skill {\n"
+            "        #[arg(long)]\n"
+            "        example: bool,\n"
+            "    },\n"
+            "    Verify(Box<verify::VerifyArgs>),\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (root / "trusted/cargo-anneal/src/init.rs").write_text(
+            "pub struct InitArgs {\n"
+            "    #[arg(long)]\n"
+            "    pub standalone: bool,\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (root / "trusted/cargo-anneal/src/verify.rs").write_text(
+            'const PINNED_RUSTC_COMMIT: &str = '
+            '"f8a08b688cbe60acc386ed1fbd1b7cbaaf5576b1";\n'
+            "const RECEIPT_SCHEMA_VERSION: u32 = 3;\n"
+            "enum VerificationTaint { SorryInProof }\n"
+            "impl VerificationTaint {\n"
+            "    const fn as_str(self) -> &'static str {\n"
+            "        match self {\n"
+            '            Self::SorryInProof => "sorry_in_proof",\n'
+            "        }\n"
+            "    }\n"
+            "}\n"
+            "pub struct VerifyArgs {\n"
+            "    #[arg(long)]\n"
+            "    request: Option<PathBuf>,\n"
+            "    #[arg(long, global = true)]\n"
+            "    allow_sorry_in_proof: bool,\n"
+            "    #[command(subcommand)]\n"
+            "    command: Option<VerifySubcommand>,\n"
+            "}\n"
+            "enum VerifySubcommand { Rustc(RustcArgs) }\n"
+            "struct RustcArgs {\n"
+            "    crate_root: PathBuf,\n"
+            "    #[arg(long)]\n"
+            "    crate_name: String,\n"
+            "}\n"
+            "impl Scope {\n"
+            "    const fn verified_status(&self, t: bool) -> &'static str {\n"
+            "        match t {\n"
+            '            false => "crate_verified",\n'
+            '            false => "selected_unit_verified",\n'
+            '            true => "tainted_crate_verified",\n'
+            '            true => "tainted_selected_unit_verified",\n'
+            "        }\n"
+            "    }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        (root / "flake.nix").write_text('rustDate = "2026-05-31";\n', encoding="utf-8")
+        (root / "trusted/lean/lean-toolchain").write_text(
+            "leanprover/lean4:v4.34.1\n", encoding="utf-8"
+        )
+        (root / "theory/bundle-manifest.json").write_text(
+            json.dumps({"modules": [{"path": "theory/Anneal/MirWp.lean"}]}),
+            encoding="utf-8",
+        )
+        (root / "trusted/cargo-anneal/skills/cargo-anneal/SKILL.md").write_text(
+            "# cargo-anneal\n", encoding="utf-8"
+        )
+        (root / "skills/spec-authoring/SKILL.md").write_text(
+            "# spec-authoring\n", encoding="utf-8"
+        )
+        (root / "skills/README.md").write_text(
+            "cargo-anneal spec-authoring\n", encoding="utf-8"
+        )
+        (root / "docs/alpha.md").write_text(
+            '"schema_version": 3 --request --allow-sorry-in-proof sorry_in_proof '
+            "--crate-name Anneal.MirWp\n",
+            encoding="utf-8",
+        )
+        (root / "docs/README.md").write_text(
+            "See ci/check_docs.py, ci/docs_surface_manifest.json, --verify-examples.\n",
+            encoding="utf-8",
+        )
+        (root / "ci/docs_surface_manifest.json").write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "freshness_contract": {
+                        "doc": "docs/README.md",
+                        "required_tokens": [
+                            "ci/check_docs.py",
+                            "ci/docs_surface_manifest.json",
+                            "--verify-examples",
+                        ],
+                    },
+                    "cli": {
+                        "subcommands": {
+                            "setup": {
+                                "disposition": "book",
+                                "book_pages": [
+                                    "getting-started/installation.md"
+                                ],
+                                "help_case": "examples/cli/setup-help",
+                                "flags": {
+                                    "--local-archive": {
+                                        "disposition": "book",
+                                        "book_pages": [
+                                            "getting-started/installation.md"
+                                        ],
+                                    }
+                                },
+                            },
+                            "init": {
+                                "disposition": "book",
+                                "book_pages": ["reference/cli.md"],
+                                "help_case": "examples/cli/init-help",
+                                "flags": {
+                                    "--standalone": {
+                                        "disposition": "book",
+                                        "book_pages": ["reference/cli.md"],
+                                    }
+                                },
+                            },
+                            "skill": {
+                                "disposition": "book",
+                                "book_pages": ["reference/cli.md"],
+                                "help_case": "examples/cli/skill-help",
+                                "flags": {
+                                    "--example": {
+                                        "disposition": "internal_test_only",
+                                        "reason": "covered only in tests",
+                                    }
+                                },
+                            },
+                            "verify": {
+                                "disposition": "book",
+                                "book_pages": ["reference/cli.md"],
+                                "help_case": "examples/cli/verify-help",
+                                "flags": {
+                                    "--request": {
+                                        "disposition": "book",
+                                        "book_pages": ["reference/cli.md"],
+                                        "alpha_doc": True,
+                                    },
+                                    "--allow-sorry-in-proof": {
+                                        "disposition": "book",
+                                        "book_pages": ["reference/cli.md"],
+                                        "alpha_doc": True,
+                                    },
+                                },
+                            },
+                            "verify rustc": {
+                                "disposition": "book",
+                                "book_pages": ["reference/cli.md"],
+                                "help_case": "examples/cli/verify-rustc-help",
+                                "flags": {
+                                    "--crate-name": {
+                                        "disposition": "book",
+                                        "book_pages": ["reference/cli.md"],
+                                        "alpha_doc": True,
+                                    }
+                                },
+                            },
+                        }
+                    },
+                    "receipt": {
+                        "schema_version": 3,
+                        "book_pages": ["reference/cli.md"],
+                        "alpha_doc": True,
+                        "verified_statuses": [
+                            "crate_verified",
+                            "selected_unit_verified",
+                        ],
+                        "tainted_statuses": [
+                            "tainted_crate_verified",
+                            "tainted_selected_unit_verified",
+                        ],
+                        "taint_reasons": {
+                            "sorry_in_proof": {
+                                "flag": "--allow-sorry-in-proof",
+                                "book_pages": ["reference/cli.md"],
+                                "alpha_doc": True,
+                            }
+                        },
+                    },
+                    "toolchain_pins": {
+                        "pinned_rustc_commit_prefix_len": 12,
+                        "book_pages_citing_rustc_pin": ["reference/cli.md"],
+                    },
+                    "theory_modules": {
+                        "Anneal.MirWp": {
+                            "disposition": "public_library",
+                            "book_pages": ["guides/01-standalone.md"],
+                            "alpha_doc": True,
+                        }
+                    },
+                    "skills": {
+                        "cargo-anneal": {
+                            "disposition": "user_facing",
+                            "source": (
+                                "trusted/cargo-anneal/skills/"
+                                "cargo-anneal/SKILL.md"
+                            ),
+                            "referenced_in": ["skills/README.md"],
+                        },
+                        "spec-authoring": {
+                            "disposition": "user_facing",
+                            "source": "skills/spec-authoring/SKILL.md",
+                            "referenced_in": ["skills/README.md"],
+                        },
+                    },
+                    "tutor_guides": {
+                        "01-standalone.md": {
+                            "example_dir": "examples/guides/01-standalone",
+                            "covers_surfaces": [
+                                "init --standalone",
+                                "verify --request",
+                                "Anneal.MirWp",
+                                "selected_unit_verified",
+                            ],
+                        }
+                    },
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        return root
+
+    def test_real_repository_surface_freshness_passes(self):
+        self.assertEqual(check_docs.check_surface_freshness(ANNEAL_ROOT), [])
+
+    def test_surface_drift_oracles_fail_closed(self):
+        with tempfile.TemporaryDirectory(prefix="anneal-surface-base-") as tmp:
+            root = self._make_surface_root(Path(tmp))
+            self.assertEqual(check_docs.check_sources(root), [])
+
+        mutations = [
+            (
+                "missing_manifest",
+                lambda r: (r / "ci/docs_surface_manifest.json").unlink(),
+                "missing ci/docs_surface_manifest.json",
+            ),
+            (
+                "new_cli_subcommand",
+                lambda r: (r / "trusted/cargo-anneal/src/cli.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/cli.rs")
+                    .read_text()
+                    .replace(
+                        "Verify(Box<verify::VerifyArgs>),",
+                        "Verify(Box<verify::VerifyArgs>),\n    Check,",
+                    ),
+                    encoding="utf-8",
+                ),
+                "undocumented CLI subcommands ['check']",
+            ),
+            (
+                "new_multiline_cli_flag",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        "request: Option<PathBuf>,",
+                        "request: Option<PathBuf>,\n"
+                        "    #[arg(\n        long,\n        short = 'F',\n    )]\n"
+                        "    features: Vec<String>,",
+                    ),
+                    encoding="utf-8",
+                ),
+                "undocumented CLI flags ['--features']",
+            ),
+            (
+                "stale_removed_cli_flag",
+                lambda r: (r / "trusted/cargo-anneal/src/init.rs").write_text(
+                    "pub struct InitArgs {\n}\n",
+                    encoding="utf-8",
+                ),
+                "stale removed CLI flags ['--standalone']",
+            ),
+            (
+                "unsupported_flatten",
+                lambda r: (r / "trusted/cargo-anneal/src/init.rs").write_text(
+                    "pub struct InitArgs {\n"
+                    "    #[command(flatten)]\n"
+                    "    extra: ExtraArgs,\n"
+                    "}\n",
+                    encoding="utf-8",
+                ),
+                "unsupported #[command(flatten)]",
+            ),
+            (
+                "new_theory_module",
+                lambda r: (r / "theory/bundle-manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "modules": [
+                                {"path": "theory/Anneal/MirWp.lean"},
+                                {"path": "theory/Anneal/NewThing.lean"},
+                            ]
+                        }
+                    ),
+                    encoding="utf-8",
+                ),
+                "undocumented theory modules ['Anneal.NewThing']",
+            ),
+            (
+                "new_skill",
+                lambda r: (
+                    (r / "skills/new-skill").mkdir(),
+                    (r / "skills/new-skill/SKILL.md").write_text(
+                        "# New\n", encoding="utf-8"
+                    ),
+                ),
+                "undocumented skills ['new-skill']",
+            ),
+            (
+                "stale_rustc_pin_in_book",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        "f8a08b688cbe60acc386ed1fbd1b7cbaaf5576b1",
+                        "11111111111160acc386ed1fbd1b7cbaaf5576b1",
+                    ),
+                    encoding="utf-8",
+                ),
+                "missing from rendered `reference/cli.md`",
+            ),
+            (
+                "stale_nightly_date_in_book",
+                lambda r: (r / "flake.nix").write_text(
+                    'rustDate = "2026-07-01";\n', encoding="utf-8"
+                ),
+                "stale nightly pin `nightly-2026-05-31`",
+            ),
+            (
+                "stale_lean_version_in_book",
+                lambda r: (r / "trusted/lean/lean-toolchain").write_text(
+                    "leanprover/lean4:v4.35.0\n", encoding="utf-8"
+                ),
+                "stale Lean version `v4.34.1`",
+            ),
+            (
+                "bumped_receipt_schema_version",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        "RECEIPT_SCHEMA_VERSION: u32 = 3;",
+                        "RECEIPT_SCHEMA_VERSION: u32 = 4;",
+                    ),
+                    encoding="utf-8",
+                ),
+                "receipt schema_version 3 != live verify.rs 4",
+            ),
+            (
+                "new_taint_atom",
+                lambda r: (r / "trusted/cargo-anneal/src/verify.rs").write_text(
+                    (r / "trusted/cargo-anneal/src/verify.rs")
+                    .read_text()
+                    .replace(
+                        "enum VerificationTaint { SorryInProof }",
+                        "enum VerificationTaint { SorryInProof, NewTaint }",
+                    )
+                    .replace(
+                        'Self::SorryInProof => "sorry_in_proof"',
+                        'Self::SorryInProof => "sorry_in_proof",\n'
+                        'Self::NewTaint => "new_taint"',
+                    ),
+                    encoding="utf-8",
+                ),
+                "`receipt.taint_reasons` does not match live verify.rs",
+            ),
+            (
+                "missing_freshness_contract_doc",
+                lambda r: (r / "docs/README.md").write_text(
+                    "empty\n", encoding="utf-8"
+                ),
+                "missing freshness contract token",
+            ),
+        ]
+
+        for label, mutator, expected_err in mutations:
+            with self.subTest(case=label):
+                with tempfile.TemporaryDirectory(
+                    prefix=f"anneal-surface-{label}-"
+                ) as tmp:
+                    root = self._make_surface_root(Path(tmp))
+                    mutator(root)
+                    errs = check_docs.check_sources(root)
+                    self.assertTrue(
+                        any(expected_err in e for e in errs),
+                        (label, errs),
+                    )
+
+
 if __name__ == "__main__":
     unittest.main()

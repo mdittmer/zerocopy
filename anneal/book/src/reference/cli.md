@@ -59,9 +59,10 @@ by default. Verification writes a JSON Receipt Schema v3 (`schema_version: 3`)
 to standard output and exits with:
 
 - `0`: verification succeeded (`selected_unit_verified` or `crate_verified`, or
-  a `tainted_*` status when `taint_reasons` is non-empty). Passing receipts
-  also include advisory anti-vacuity `spec_warnings` (printed to standard error
-  when non-empty) without tainting or rejecting valid proofs.
+  `tainted_selected_unit_verified` / `tainted_crate_verified` when
+  `taint_reasons` is non-empty). Passing receipts also include advisory
+  anti-vacuity `spec_warnings` (printed to standard error when non-empty)
+  without tainting or rejecting valid proofs.
 - `1`: proof or profile rejection (`proof_failed` or `unsupported`).
 - `2`: compilation, tool, sandbox, setup, artifact, or CLI usage error
   (`compiler_failed`, `tool_failed`, or argument diagnostics on standard error).

@@ -55,6 +55,41 @@ cargo run --locked -p anneal-audit -- \
 - The [Gate 2 review guide](codex-review.md) describes review gates and the
   standalone diagnostic evaluator.
 
+### Public book and Tutor freshness
+
+Two complementary layers keep the [Anneal book](../book/src/index.md) and its
+interactive Stage 0 Tutor chapters accurate as `main` evolves:
+
+1. **Automated CI execution and HTML parity (`--verify-examples --build`):**
+   `static-checks` runs `python3 -B ci/check_docs.py --check-sources` on every
+   Anneal PR, and `installed-smoke` runs `python3 -B ci/check_docs.py
+   --check-sources --verify-examples --build` against the newly built
+   `cargo-anneal` binary, checking every `cli` and `tutor` workflow case
+   (`book/examples/guides/*`) and rendered mdBook HTML code parity.
+2. **Deterministic surface-drift gates (`ci/docs_surface_manifest.json`):**
+   `--check-sources` parses `trusted/cargo-anneal/src/{cli,init,verify}.rs`,
+   Receipt Schema v3 statuses and taint atoms, `theory/bundle-manifest.json`,
+   `skills/*/SKILL.md`, `trusted/lean/lean-toolchain`, and `flake.nix`, failing
+   closed if any CLI subcommand, flag, bundled `Anneal.*` module, skill, or
+   compiler/Lean pin changes without updating `ci/docs_surface_manifest.json`
+   and the affected book chapter.
+
+When a PR changes user-facing CLI flags, bundled theory, skills, or toolchain
+pins, update the affected `book/src/` page and `ci/docs_surface_manifest.json`,
+and refresh example outputs with `--verify-examples --bless`:
+
+```sh
+# Validate and re-bless Anneal book examples against an installed toolchain
+(cd anneal && python3 -B ci/check_docs.py --check-sources \
+  --verify-examples --cargo-anneal /path/to/cargo-anneal --bless)
+```
+
+Before cutting an `anneal-v*` prerelease or expanding [Alpha Usage](alpha.md)
+(Profile v1 bounds, build-system support, or workflow entrypoints), audit the
+`book/src/guides/` narrative and `book/examples/guides/` scenarios against the
+current alpha contract to catch qualitative UX drift beyond automated surface
+checks.
+
 ## Documentation index
 
 Documents below distinguish between **Current** behavior (what runs in Stage 0

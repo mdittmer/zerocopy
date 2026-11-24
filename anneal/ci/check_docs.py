@@ -888,10 +888,13 @@ def _validate_expect_receipt_spec(
                     f"{case_file}: step[{idx}] `expect_receipt.{str_key}` must be "
                     f"non-empty string"
                 )
-    if "spec_warnings" in exp_r and not isinstance(exp_r["spec_warnings"], list):
-        errors.append(
-            f"{case_file}: step[{idx}] `expect_receipt.spec_warnings` must be a list"
-        )
+    if "spec_warnings" in exp_r:
+        sw = exp_r["spec_warnings"]
+        if not isinstance(sw, list) or not all(isinstance(x, dict) for x in sw):
+            errors.append(
+                f"{case_file}: step[{idx}] `expect_receipt.spec_warnings` must be "
+                f"a list of warning objects"
+            )
     for list_key in ("assumptions", "deferred", "selected_paths"):
         if list_key in exp_r:
             vals = exp_r[list_key]
@@ -920,6 +923,10 @@ def _validate_tutor_case(
     for req in ("description", "artifacts", "steps"):
         if req not in data:
             errors.append(f"{case_file}: missing required field `{req}`")
+    if "description" in data and (
+        not isinstance(data["description"], str) or not data["description"].strip()
+    ):
+        errors.append(f"{case_file}: `description` must be a non-empty string")
 
     artifacts = data.get("artifacts")
     declared_paths: set[Path] = set()
@@ -1728,6 +1735,980 @@ def _collect_verified_rust_boring_lines(anneal_root: Path) -> set[str]:
     return allowed
 
 
+CHAR_LITERAL_RE = re.compile(r"'(?:\\.|[^'\\])'")
+RAW_STRING_START_RE = re.compile(r"b?r(#*)\"")
+
+
+def _skip_rust_string_or_comment(text: str, pos: int) -> int | None:
+    """Advance past a Rust comment, string, raw string, or char literal at `pos`."""
+    n = len(text)
+    if text.startswith("//", pos):
+        nl = text.find("\n", pos + 2)
+        return n if nl == -1 else nl + 1
+    if text.startswith("/*", pos):
+        depth = 1
+        cur = pos + 2
+        while cur < n and depth > 0:
+            if text.startswith("/*", cur):
+                depth += 1
+                cur += 2
+            elif text.startswith("*/", cur):
+                depth -= 1
+                cur += 2
+            else:
+                cur += 1
+        return cur
+    raw_match = RAW_STRING_START_RE.match(text, pos)
+    if raw_match:
+        end_delim = '"' + raw_match.group(1)
+        end_idx = text.find(end_delim, raw_match.end())
+        return n if end_idx == -1 else end_idx + len(end_delim)
+    if text[pos] == '"' or text.startswith('b"', pos):
+        cur = pos + (2 if text[pos] == "b" else 1)
+        while cur < n:
+            if text[cur] == "\\":
+                cur += 2
+            elif text[cur] == '"':
+                return cur + 1
+            else:
+                cur += 1
+        return n
+    if text[pos] == "'" and (pos == 0 or not text[pos - 1].isalnum()):
+        char_match = CHAR_LITERAL_RE.match(text, pos)
+        if char_match:
+            return char_match.end()
+    return None
+
+
+def _strip_rust_comments(text: str) -> str:
+    """Return `text` with Rust `//` and nested `/* ... */` comments removed."""
+    out: list[str] = []
+    pos = 0
+    n = len(text)
+    while pos < n:
+        if text.startswith(("//", "/*"), pos):
+            nxt = _skip_rust_string_or_comment(text, pos)
+            assert nxt is not None
+            out.append("\n" * text[pos:nxt].count("\n"))
+            pos = nxt
+        elif (
+            text[pos] in {'"', "'"}
+            or text.startswith(('r#', 'r"', 'b"', "br"), pos)
+        ):
+            nxt = _skip_rust_string_or_comment(text, pos)
+            if nxt is not None:
+                out.append(text[pos:nxt])
+                pos = nxt
+            else:
+                out.append(text[pos])
+                pos += 1
+        else:
+            out.append(text[pos])
+            pos += 1
+    return "".join(out)
+
+
+def _find_matching_delimiter(
+    text: str, open_idx: int, open_ch: str, close_ch: str
+) -> int | None:
+    """Return matching closing delimiter index in Rust source, or None."""
+    depth = 0
+    pos = open_idx
+    n = len(text)
+    while pos < n:
+        nxt = _skip_rust_string_or_comment(text, pos)
+        if nxt is not None:
+            pos = nxt
+            continue
+        ch = text[pos]
+        if ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return pos
+        pos += 1
+    return None
+
+
+def _extract_rust_brace_block(
+    text: str, header_re: re.Pattern[str]
+) -> str | None:
+    """Extract the inner `{ ... }` body of a Rust struct or enum definition."""
+    stripped = _strip_rust_comments(text)
+    match = header_re.search(stripped)
+    if not match:
+        return None
+    brace_open = stripped.find("{", match.end() - 1)
+    if brace_open < 0:
+        return None
+    brace_close = _find_matching_delimiter(stripped, brace_open, "{", "}")
+    if brace_close is None:
+        return None
+    return stripped[brace_open + 1 : brace_close]
+
+
+def _split_rust_top_level(body: str) -> list[str]:
+    """Split a Rust brace body into top-level comma-separated entries."""
+    items: list[str] = []
+    depth = 0
+    start = 0
+    pos = 0
+    n = len(body)
+    while pos < n:
+        nxt = _skip_rust_string_or_comment(body, pos)
+        if nxt is not None:
+            pos = nxt
+            continue
+        ch = body[pos]
+        if ch in "{([":
+            depth += 1
+        elif ch in "})]":
+            depth = max(0, depth - 1)
+        elif ch == "," and depth == 0:
+            chunk = body[start:pos].strip()
+            if chunk:
+                items.append(chunk)
+            start = pos + 1
+        pos += 1
+    tail = body[start:].strip()
+    if tail:
+        items.append(tail)
+    return items
+
+
+def _extract_rust_attrs(item: str) -> tuple[list[str], str]:
+    """Extract leading `#[...]` attribute contents and the item remainder."""
+    attrs: list[str] = []
+    pos = 0
+    n = len(item)
+    while pos < n:
+        while pos < n and item[pos].isspace():
+            pos += 1
+        if item.startswith("#[", pos):
+            end = _find_matching_delimiter(item, pos + 1, "[", "]")
+            if end is None:
+                break
+            attrs.append(item[pos + 2 : end])
+            pos = end + 1
+        else:
+            break
+    return attrs, item[pos:].strip()
+
+
+def _iter_clap_arg_bodies(attrs: list[str]) -> tuple[list[str], bool, bool, str | None]:
+    """Inspect Clap field/variant attributes and return `arg(...)` bodies."""
+    arg_bodies: list[str] = []
+    is_subcommand = False
+    cmd_name: str | None = None
+    has_flatten = False
+    for attr in attrs:
+        stripped = attr.strip()
+        if stripped.startswith("command("):
+            inner = stripped[len("command(") : -1]
+            if re.search(r"\bflatten\b", inner):
+                has_flatten = True
+            if re.search(r"\bsubcommand\b", inner):
+                is_subcommand = True
+            name_m = re.search(r'\bname\s*=\s*"([^"]+)"', inner)
+            if name_m:
+                cmd_name = name_m.group(1)
+        elif stripped.startswith("arg("):
+            arg_bodies.append(stripped[len("arg(") : -1])
+        elif stripped.startswith("clap("):
+            arg_bodies.append(stripped[len("clap(") : -1])
+        elif stripped.startswith("cfg_attr("):
+            parts = _split_rust_top_level(stripped[len("cfg_attr(") : -1])
+            for part in parts[1:]:
+                p_strip = part.strip()
+                if p_strip.startswith("arg(") and p_strip.endswith(")"):
+                    arg_bodies.append(p_strip[len("arg(") : -1])
+    return arg_bodies, is_subcommand, has_flatten, cmd_name
+
+
+def _parse_clap_fields(body: str, context: str) -> tuple[set[str], list[str]]:
+    """Extract `--flag` names from Clap `#[derive(Args)]` struct/variant fields."""
+    flags: set[str] = set()
+    errors: list[str] = []
+    for item in _split_rust_top_level(body):
+        attrs, remainder = _extract_rust_attrs(item)
+        arg_bodies, is_subcmd, has_flatten, _ = _iter_clap_arg_bodies(attrs)
+        if has_flatten:
+            errors.append(
+                f"{context}: unsupported #[command(flatten)] in Clap extractor"
+            )
+            continue
+        if is_subcmd or not arg_bodies:
+            continue
+        field_m = re.match(
+            r"^(?:pub(?:\([^)]*\))?\s+)?(?:r#)?([A-Za-z0-9_]+)\s*:", remainder
+        )
+        if not field_m:
+            errors.append(f"{context}: could not parse field name in {remainder!r}")
+            continue
+        field_name = field_m.group(1)
+        has_long = False
+        has_short = False
+        custom_long: str | None = None
+        for abody in arg_bodies:
+            for tok in _split_rust_top_level(abody):
+                t = tok.strip()
+                long_m = re.fullmatch(r'long\s*=\s*"([^"]+)"', t)
+                if long_m:
+                    has_long = True
+                    custom_long = long_m.group(1)
+                elif t == "long":
+                    has_long = True
+                elif t == "short" or re.fullmatch(r"short\s*=\s*'.'", t):
+                    has_short = True
+        if has_long:
+            flag_name = custom_long or field_name.replace("_", "-")
+            flags.add(f"--{flag_name}")
+        elif has_short:
+            errors.append(
+                f"{context}: short-only option `{field_name}` lacks a long flag"
+            )
+    return flags, errors
+
+
+def _pascal_to_kebab(name: str) -> str:
+    return re.sub(r"(?<!^)([A-Z])", r"-\1", name).lower()
+
+
+def _extract_rust_cli_surface(
+    anneal_root: Path,
+) -> tuple[dict[str, set[str]], list[str]]:
+    """Parse `cli.rs`, `init.rs`, and `verify.rs` into `{subcommand: {flags}}`."""
+    errors: list[str] = []
+    src_dir = anneal_root / "trusted/cargo-anneal/src"
+    cli_path = src_dir / "cli.rs"
+    init_path = src_dir / "init.rs"
+    verify_path = src_dir / "verify.rs"
+    for req in (cli_path, init_path, verify_path):
+        if not req.is_file():
+            return {}, [f"missing CLI source file: {req.relative_to(anneal_root)}"]
+
+    cli_text = cli_path.read_text(encoding="utf-8")
+    init_text = init_path.read_text(encoding="utf-8")
+    verify_text = verify_path.read_text(encoding="utf-8")
+
+    cmd_body = _extract_rust_brace_block(
+        cli_text, re.compile(r"\benum\s+Command\b")
+    )
+    init_body = _extract_rust_brace_block(
+        init_text, re.compile(r"\bpub\s+struct\s+InitArgs\b")
+    )
+    verify_body = _extract_rust_brace_block(
+        verify_text, re.compile(r"\bpub\s+struct\s+VerifyArgs\b")
+    )
+    vsub_body = _extract_rust_brace_block(
+        verify_text, re.compile(r"\benum\s+VerifySubcommand\b")
+    )
+    rustc_body = _extract_rust_brace_block(
+        verify_text, re.compile(r"\bstruct\s+RustcArgs\b")
+    )
+    for label, block in (
+        ("cli.rs enum Command", cmd_body),
+        ("init.rs struct InitArgs", init_body),
+        ("verify.rs struct VerifyArgs", verify_body),
+        ("verify.rs enum VerifySubcommand", vsub_body),
+        ("verify.rs struct RustcArgs", rustc_body),
+    ):
+        if block is None:
+            errors.append(f"surface extractor failed to locate `{label}`")
+    if errors:
+        return {}, errors
+
+    assert cmd_body is not None and init_body is not None
+    assert verify_body is not None and vsub_body is not None and rustc_body is not None
+
+    init_flags, errs = _parse_clap_fields(init_body, "init.rs InitArgs")
+    errors.extend(errs)
+    verify_flags, errs = _parse_clap_fields(verify_body, "verify.rs VerifyArgs")
+    errors.extend(errs)
+    rustc_flags, errs = _parse_clap_fields(rustc_body, "verify.rs RustcArgs")
+    errors.extend(errs)
+
+    commands: dict[str, set[str]] = {}
+    for item in _split_rust_top_level(cmd_body):
+        attrs, remainder = _extract_rust_attrs(item)
+        _, _, _, cmd_name = _iter_clap_arg_bodies(attrs)
+        struct_m = re.match(r"^([A-Za-z0-9_]+)\s*\{([\s\S]*)\}$", remainder)
+        tuple_m = re.match(r"^([A-Za-z0-9_]+)\s*\(([\s\S]*)\)$", remainder)
+        unit_m = re.match(r"^([A-Za-z0-9_]+)$", remainder)
+        if struct_m:
+            v_name = cmd_name or _pascal_to_kebab(struct_m.group(1))
+            v_flags, errs = _parse_clap_fields(
+                struct_m.group(2), f"cli.rs Command::{struct_m.group(1)}"
+            )
+            errors.extend(errs)
+            commands[v_name] = v_flags
+        elif tuple_m:
+            v_id = tuple_m.group(1)
+            v_type = tuple_m.group(2).strip()
+            v_name = cmd_name or _pascal_to_kebab(v_id)
+            if "InitArgs" in v_type:
+                commands[v_name] = init_flags
+            elif "VerifyArgs" in v_type:
+                commands[v_name] = verify_flags
+            else:
+                errors.append(
+                    f"cli.rs Command::{v_id}: unsupported args type {v_type!r}"
+                )
+        elif unit_m:
+            v_name = cmd_name or _pascal_to_kebab(unit_m.group(1))
+            commands[v_name] = set()
+        else:
+            errors.append(f"cli.rs Command: unrecognized variant {remainder!r}")
+
+    for item in _split_rust_top_level(vsub_body):
+        attrs, remainder = _extract_rust_attrs(item)
+        _, _, _, cmd_name = _iter_clap_arg_bodies(attrs)
+        tuple_m = re.match(r"^([A-Za-z0-9_]+)\s*\(([\s\S]*)\)$", remainder)
+        if tuple_m and "RustcArgs" in tuple_m.group(2):
+            sub_name = cmd_name or _pascal_to_kebab(tuple_m.group(1))
+            commands[f"verify {sub_name}"] = rustc_flags
+        else:
+            v_m = re.match(r"^([A-Za-z0-9_]+)", remainder)
+            sub_name = cmd_name or (
+                _pascal_to_kebab(v_m.group(1)) if v_m else remainder
+            )
+            commands[f"verify {sub_name}"] = set()
+    return commands, errors
+
+
+def _extract_rust_receipt_and_pins(
+    anneal_root: Path,
+) -> tuple[dict, list[str]]:
+    """Extract Receipt schema version, taint atoms, status names, and pins."""
+    errors: list[str] = []
+    verify_path = anneal_root / "trusted/cargo-anneal/src/verify.rs"
+    lean_tc_path = anneal_root / "trusted/lean/lean-toolchain"
+    flake_path = anneal_root / "flake.nix"
+    if not verify_path.is_file():
+        return {}, ["missing trusted/cargo-anneal/src/verify.rs"]
+    verify_text = verify_path.read_text(encoding="utf-8")
+
+    sv_m = re.search(
+        r"\bconst\s+RECEIPT_SCHEMA_VERSION\s*:\s*u32\s*=\s*(\d+)\s*;", verify_text
+    )
+    if not sv_m:
+        errors.append("verify.rs: missing RECEIPT_SCHEMA_VERSION")
+    pin_m = re.search(
+        r'\bconst\s+PINNED_RUSTC_COMMIT\s*:\s*&str\s*=\s*"([0-9a-f]{40})"\s*;',
+        verify_text,
+    )
+    if not pin_m:
+        errors.append("verify.rs: missing PINNED_RUSTC_COMMIT")
+
+    taint_enum = _extract_rust_brace_block(
+        verify_text, re.compile(r"\benum\s+VerificationTaint\b")
+    )
+    taint_impl = _extract_rust_brace_block(
+        verify_text, re.compile(r"\bimpl\s+VerificationTaint\b")
+    )
+    taint_reasons: dict[str, str] = {}
+    if taint_enum is None or taint_impl is None:
+        errors.append("verify.rs: missing VerificationTaint enum/impl")
+    else:
+        variants = [
+            _extract_rust_attrs(item)[1]
+            for item in _split_rust_top_level(taint_enum)
+        ]
+        for v in variants:
+            arm_m = re.search(
+                rf'\bSelf::{re.escape(v)}\s*=>\s*"([a-z0-9_]+)"', taint_impl
+            )
+            if not arm_m:
+                errors.append(
+                    f"verify.rs: VerificationTaint::{v} missing as_str() wire tag"
+                )
+            else:
+                taint_reasons[v] = arm_m.group(1)
+
+    verified_statuses: set[str] = set()
+    tainted_statuses: set[str] = set()
+    scope_impl = _extract_rust_brace_block(
+        verify_text, re.compile(r"\bimpl\s+Scope\b")
+    )
+    if scope_impl is None:
+        errors.append("verify.rs: missing impl Scope")
+    else:
+        for st_m in re.finditer(r'"((?:tainted_)?[a-z_]*verified)"', scope_impl):
+            st = st_m.group(1)
+            if st.startswith("tainted_"):
+                tainted_statuses.add(st)
+            else:
+                verified_statuses.add(st)
+
+    rust_date: str | None = None
+    if flake_path.is_file():
+        flake_text = flake_path.read_text(encoding="utf-8")
+        rd_m = re.search(r'\brustDate\s*=\s*"(\d{4}-\d{2}-\d{2})"\s*;', flake_text)
+        if rd_m:
+            rust_date = rd_m.group(1)
+
+    lean_version: str | None = None
+    if lean_tc_path.is_file():
+        tc_text = lean_tc_path.read_text(encoding="utf-8").strip()
+        lv_m = re.fullmatch(r"leanprover/lean4:(v\d+\.\d+\.\d+)", tc_text)
+        if lv_m:
+            lean_version = lv_m.group(1)
+        else:
+            errors.append(f"trusted/lean/lean-toolchain: unexpected format {tc_text!r}")
+
+    return (
+        {
+            "schema_version": int(sv_m.group(1)) if sv_m else None,
+            "pinned_rustc_commit": pin_m.group(1) if pin_m else None,
+            "rust_date": rust_date,
+            "lean_version": lean_version,
+            "taint_reasons": set(taint_reasons.values()),
+            "verified_statuses": verified_statuses,
+            "tainted_statuses": tainted_statuses,
+        },
+        errors,
+    )
+
+
+def _collect_rendered_book_pages(anneal_root: Path) -> dict[str, str]:
+    """Render each `book/src/**/*.md` page with verified `{{#include ...}}` text."""
+    src_root = anneal_root / "book/src"
+    if not src_root.is_dir():
+        return {}
+    rendered: dict[str, str] = {}
+    for md_file in sorted(src_root.rglob("*.md")):
+        if md_file.is_symlink() or not md_file.is_file():
+            continue
+        rel_key = md_file.relative_to(src_root).as_posix()
+        text = md_file.read_text(encoding="utf-8")
+        fences = parse_fences(text)
+        lang_by_line: dict[int, str] = {}
+        for fence in fences:
+            if fence.get("unclosed"):
+                continue
+            tokens = _parse_fence_tokens(fence["info"])
+            lang = "rust" if (tokens & {"rust", "rs"}) else ""
+            for ln, _body in fence["body"]:
+                lang_by_line[ln] = lang
+        out_lines: list[str] = []
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            strict = STRICT_INCLUDE_RE.match(stripped)
+            if strict:
+                try:
+                    rel_t, anchor, lr = _parse_include_spec(strict.group("spec"))
+                    raw_t = md_file.parent / rel_t
+                    if not _has_symlink_component(raw_t, anneal_root / "book"):
+                        t = raw_t.resolve()
+                        if t.is_file() and _is_within(t, anneal_root / "book/examples"):
+                            out_lines.append(
+                                _render_include_slice(
+                                    t.read_text(encoding="utf-8"),
+                                    strict.group("kind"),
+                                    anchor,
+                                    lr,
+                                    lang=lang_by_line.get(lineno, ""),
+                                )
+                            )
+                            continue
+                except (DocError, KeyError, IndexError, OSError):
+                    pass
+            out_lines.append(line)
+        rendered[rel_key] = "\n".join(out_lines)
+    return rendered
+
+
+def _check_manifest_page_tokens(
+    pages: dict[str, str],
+    book_pages: object,
+    tokens: list[str],
+    context: str,
+    errors: list[str],
+) -> None:
+    """Verify `book_pages` are existing book chapters containing every token."""
+    if not isinstance(book_pages, list) or not book_pages or not all(
+        isinstance(p, str) for p in book_pages
+    ):
+        errors.append(f"{context}: `book_pages` must be a non-empty list of paths")
+        return
+    for page in book_pages:
+        if page not in pages:
+            errors.append(f"{context}: unknown book page `{page}`")
+            continue
+        rendered = pages[page]
+        for token in tokens:
+            if token not in rendered:
+                errors.append(
+                    f"{context}: token `{token}` missing from rendered `{page}`"
+                )
+
+
+def _check_cli_manifest(
+    anneal_root: Path,
+    manifest_cli: object,
+    pages: dict[str, str],
+    alpha_text: str | None,
+    errors: list[str],
+) -> None:
+    """Cross-check extracted Rust Clap CLI grammar against docs manifest."""
+    live_cli, cli_errs = _extract_rust_cli_surface(anneal_root)
+    errors.extend(cli_errs)
+    if cli_errs:
+        return
+    if not isinstance(manifest_cli, dict) or not isinstance(
+        manifest_cli.get("subcommands"), dict
+    ):
+        errors.append(
+            "ci/docs_surface_manifest.json: `cli.subcommands` must be an object"
+        )
+        return
+    sub_map = manifest_cli["subcommands"]
+    if set(live_cli.keys()) != set(sub_map.keys()):
+        missing = sorted(set(live_cli.keys()) - set(sub_map.keys()))
+        stale = sorted(set(sub_map.keys()) - set(live_cli.keys()))
+        if missing:
+            errors.append(
+                f"docs_surface_manifest.json: undocumented CLI subcommands {missing}"
+            )
+        if stale:
+            errors.append(
+                f"docs_surface_manifest.json: stale removed CLI subcommands {stale}"
+            )
+        return
+
+    for cmd_name, live_flags in sorted(live_cli.items()):
+        entry = sub_map[cmd_name]
+        ctx = f"docs_surface_manifest.json cli.subcommands[{cmd_name!r}]"
+        if not isinstance(entry, dict):
+            errors.append(f"{ctx}: must be an object")
+            continue
+        disp = entry.get("disposition")
+        if disp == "book":
+            _check_manifest_page_tokens(
+                pages, entry.get("book_pages"), [cmd_name], ctx, errors
+            )
+        elif not isinstance(entry.get("reason"), str) or not entry["reason"].strip():
+            errors.append(f"{ctx}: non-book disposition {disp!r} requires `reason`")
+
+        help_case = entry.get("help_case")
+        help_text = None
+        if help_case is not None:
+            if not isinstance(help_case, str):
+                errors.append(f"{ctx}: `help_case` must be a string")
+            else:
+                tr_path = anneal_root / "book" / help_case / "transcript.txt"
+                if not tr_path.is_file():
+                    errors.append(
+                        f"{ctx}: missing help_case transcript "
+                        f"{help_case}/transcript.txt"
+                    )
+                else:
+                    help_text = tr_path.read_text(encoding="utf-8")
+
+        flags_map = entry.get("flags")
+        if not isinstance(flags_map, dict):
+            errors.append(f"{ctx}: `flags` must be an object")
+            continue
+        if live_flags != set(flags_map.keys()):
+            missing_f = sorted(live_flags - set(flags_map.keys()))
+            stale_f = sorted(set(flags_map.keys()) - live_flags)
+            if missing_f:
+                errors.append(
+                    f"{ctx}: undocumented CLI flags {missing_f} added in Rust source"
+                )
+            if stale_f:
+                errors.append(
+                    f"{ctx}: stale removed CLI flags {stale_f} no longer in Rust"
+                )
+            continue
+
+        for flag_name, f_meta in sorted(flags_map.items()):
+            fctx = f"{ctx}.flags[{flag_name!r}]"
+            if not isinstance(f_meta, dict):
+                errors.append(f"{fctx}: must be an object")
+                continue
+            f_disp = f_meta.get("disposition")
+            if f_disp == "book":
+                _check_manifest_page_tokens(
+                    pages, f_meta.get("book_pages"), [flag_name], fctx, errors
+                )
+                if help_text is not None and flag_name not in help_text:
+                    errors.append(
+                        f"{fctx}: `{flag_name}` missing from "
+                        f"`{help_case}/transcript.txt`"
+                    )
+                if f_meta.get("alpha_doc") is True and alpha_text is not None:
+                    if flag_name not in alpha_text:
+                        errors.append(
+                            f"{fctx}: `{flag_name}` missing from `docs/alpha.md`"
+                        )
+            elif (
+                not isinstance(f_meta.get("reason"), str)
+                or not f_meta["reason"].strip()
+            ):
+                errors.append(
+                    f"{fctx}: non-book disposition {f_disp!r} requires `reason`"
+                )
+
+
+def _check_receipt_and_pins_manifest(
+    anneal_root: Path,
+    manifest: dict,
+    pages: dict[str, str],
+    alpha_text: str | None,
+    errors: list[str],
+) -> None:
+    """Verify Receipt schema version, taint flags, statuses, and compiler pins."""
+    live, pin_errs = _extract_rust_receipt_and_pins(anneal_root)
+    errors.extend(pin_errs)
+    if pin_errs:
+        return
+
+    rec = manifest.get("receipt")
+    if not isinstance(rec, dict):
+        errors.append("docs_surface_manifest.json: `receipt` must be an object")
+        return
+    if rec.get("schema_version") != live["schema_version"]:
+        errors.append(
+            f"docs_surface_manifest.json: receipt schema_version "
+            f"{rec.get('schema_version')!r} != live verify.rs "
+            f"{live['schema_version']!r}"
+        )
+    sv = live["schema_version"]
+    _check_manifest_page_tokens(
+        pages, rec.get("book_pages"), [f"schema_version: {sv}"], "receipt", errors
+    )
+    if rec.get("alpha_doc") is True and alpha_text is not None:
+        if f'"schema_version": {sv}' not in alpha_text:
+            errors.append(f'docs/alpha.md: missing `"schema_version": {sv}`')
+
+    for status_key in ("verified_statuses", "tainted_statuses"):
+        vals = rec.get(status_key)
+        if not isinstance(vals, list) or set(vals) != live[status_key]:
+            errors.append(
+                f"docs_surface_manifest.json: `receipt.{status_key}` {vals!r} != "
+                f"live verify.rs {sorted(live[status_key])!r}"
+            )
+        else:
+            _check_manifest_page_tokens(
+                pages,
+                rec.get("book_pages"),
+                list(vals),
+                f"receipt.{status_key}",
+                errors,
+            )
+
+    taint_map = rec.get("taint_reasons")
+    if (
+        not isinstance(taint_map, dict)
+        or set(taint_map.keys()) != live["taint_reasons"]
+    ):
+        errors.append(
+            f"docs_surface_manifest.json: `receipt.taint_reasons` does not match "
+            f"live verify.rs {sorted(live['taint_reasons'])!r}"
+        )
+    else:
+        for atom, meta in sorted(taint_map.items()):
+            actx = f"receipt.taint_reasons[{atom!r}]"
+            if not isinstance(meta, dict):
+                errors.append(f"{actx}: must be an object")
+                continue
+            tokens = [atom]
+            if isinstance(meta.get("flag"), str) and meta["flag"]:
+                tokens.append(meta["flag"])
+            _check_manifest_page_tokens(
+                pages, meta.get("book_pages"), tokens, actx, errors
+            )
+            if meta.get("alpha_doc") is True and alpha_text is not None:
+                for tok in tokens:
+                    if tok not in alpha_text:
+                        errors.append(
+                            f"{actx}: token `{tok}` missing from docs/alpha.md"
+                        )
+
+    pins = manifest.get("toolchain_pins") or {}
+    pref_len = pins.get("pinned_rustc_commit_prefix_len", 12)
+    commit = live["pinned_rustc_commit"]
+    if commit and isinstance(pref_len, int) and pref_len >= 8:
+        prefix = commit[:pref_len]
+        _check_manifest_page_tokens(
+            pages,
+            pins.get("book_pages_citing_rustc_pin", []),
+            [prefix],
+            "toolchain_pins.rustc",
+            errors,
+        )
+    if live["rust_date"]:
+        expected_nightly = f"nightly-{live['rust_date']}"
+        for pg, txt in sorted(pages.items()):
+            for found in re.findall(r"\bnightly-20\d\d-\d\d-\d\d\b", txt):
+                if found != expected_nightly:
+                    errors.append(
+                        f"book/src/{pg}: stale nightly pin `{found}` "
+                        f"(expected `{expected_nightly}` from flake.nix)"
+                    )
+        if alpha_text is not None:
+            for found in re.findall(r"\bnightly-20\d\d-\d\d-\d\d\b", alpha_text):
+                if found != expected_nightly:
+                    errors.append(
+                        f"docs/alpha.md: stale nightly pin `{found}` "
+                        f"(expected `{expected_nightly}` from flake.nix)"
+                    )
+    if live["lean_version"]:
+        expected_lean = live["lean_version"]
+        for pg, txt in sorted(pages.items()):
+            for found in re.findall(r"\bv4\.\d+\.\d+\b", txt):
+                if found != expected_lean:
+                    errors.append(
+                        f"book/src/{pg}: stale Lean version `{found}` "
+                        f"(expected `{expected_lean}` from lean-toolchain)"
+                    )
+
+
+def _check_theory_and_skills_manifest(
+    anneal_root: Path,
+    manifest: dict,
+    pages: dict[str, str],
+    alpha_text: str | None,
+    errors: list[str],
+) -> None:
+    """Cross-check bundled theory modules and repository skills against docs."""
+    bm_path = anneal_root / "theory/bundle-manifest.json"
+    if not bm_path.is_file():
+        errors.append("missing theory/bundle-manifest.json")
+    else:
+        try:
+            bm = json.loads(bm_path.read_text(encoding="utf-8"))
+            mods = {
+                entry["path"]
+                .removeprefix("theory/")
+                .removesuffix(".lean")
+                .replace("/", ".")
+                for entry in bm.get("modules", [])
+                if isinstance(entry, dict) and isinstance(entry.get("path"), str)
+            }
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"theory/bundle-manifest.json: invalid JSON: {exc}")
+            mods = set()
+        t_map = manifest.get("theory_modules")
+        if not isinstance(t_map, dict):
+            errors.append("docs_surface_manifest.json: `theory_modules` must be object")
+        elif mods != set(t_map.keys()):
+            missing = sorted(mods - set(t_map.keys()))
+            stale = sorted(set(t_map.keys()) - mods)
+            if missing:
+                errors.append(
+                    f"docs_surface_manifest.json: undocumented theory modules {missing}"
+                )
+            if stale:
+                errors.append(
+                    f"docs_surface_manifest.json: stale removed theory modules {stale}"
+                )
+        else:
+            for mod_name, meta in sorted(t_map.items()):
+                mctx = f"theory_modules[{mod_name!r}]"
+                if not isinstance(meta, dict):
+                    errors.append(f"{mctx}: must be an object")
+                    continue
+                disp = meta.get("disposition")
+                if disp == "public_library":
+                    _check_manifest_page_tokens(
+                        pages, meta.get("book_pages"), [mod_name], mctx, errors
+                    )
+                    if meta.get("alpha_doc") is True and alpha_text is not None:
+                        if mod_name not in alpha_text:
+                            errors.append(
+                                f"{mctx}: `{mod_name}` missing from docs/alpha.md"
+                            )
+                elif disp == "alpha_doc":
+                    docs_pages = meta.get("docs_pages")
+                    if not isinstance(docs_pages, list) or not docs_pages:
+                        errors.append(f"{mctx}: `alpha_doc` requires `docs_pages`")
+                    else:
+                        for dp in docs_pages:
+                            dpath = anneal_root / dp
+                            if not dpath.is_file() or mod_name not in dpath.read_text(
+                                encoding="utf-8"
+                            ):
+                                errors.append(
+                                    f"{mctx}: `{mod_name}` missing from `{dp}`"
+                                )
+                elif (
+                    not isinstance(meta.get("reason"), str)
+                    or not meta["reason"].strip()
+                ):
+                    errors.append(
+                        f"{mctx}: disposition {disp!r} requires non-empty `reason`"
+                    )
+
+    discovered_skills: dict[str, Path] = {}
+    skills_dir = anneal_root / "skills"
+    if skills_dir.is_dir():
+        for entry in sorted(skills_dir.iterdir()):
+            if entry.is_dir():
+                sm = entry / "SKILL.md"
+                if not sm.is_file():
+                    errors.append(f"skills/{entry.name}: missing SKILL.md")
+                else:
+                    discovered_skills[entry.name] = sm
+    bundled_skill = anneal_root / "trusted/cargo-anneal/skills/cargo-anneal/SKILL.md"
+    if bundled_skill.is_file():
+        discovered_skills["cargo-anneal"] = bundled_skill
+
+    s_map = manifest.get("skills")
+    if not isinstance(s_map, dict):
+        errors.append("docs_surface_manifest.json: `skills` must be an object")
+    elif set(discovered_skills.keys()) != set(s_map.keys()):
+        missing_s = sorted(set(discovered_skills.keys()) - set(s_map.keys()))
+        stale_s = sorted(set(s_map.keys()) - set(discovered_skills.keys()))
+        if missing_s:
+            errors.append(
+                f"docs_surface_manifest.json: undocumented skills {missing_s}"
+            )
+        if stale_s:
+            errors.append(
+                f"docs_surface_manifest.json: stale removed skills {stale_s}"
+            )
+    else:
+        for s_name, meta in sorted(s_map.items()):
+            sctx = f"skills[{s_name!r}]"
+            if not isinstance(meta, dict):
+                errors.append(f"{sctx}: must be an object")
+                continue
+            src = meta.get("source")
+            if not isinstance(src, str) or not (anneal_root / src).is_file():
+                errors.append(f"{sctx}: missing source file {src!r}")
+            refs = meta.get("referenced_in")
+            if not isinstance(refs, list) or not refs:
+                errors.append(f"{sctx}: `referenced_in` must be non-empty list")
+            else:
+                for ref in refs:
+                    rpath = anneal_root / ref
+                    if not rpath.is_file() or s_name not in rpath.read_text(
+                        encoding="utf-8"
+                    ):
+                        errors.append(
+                            f"{sctx}: skill `{s_name}` not referenced in `{ref}`"
+                        )
+            if meta.get("disposition") != "user_facing":
+                if (
+                    not isinstance(meta.get("reason"), str)
+                    or not meta["reason"].strip()
+                ):
+                    errors.append(f"{sctx}: non-user-facing skill requires `reason`")
+
+
+def check_surface_freshness(anneal_root: Path) -> list[str]:
+    """Verify docs/book/Tutor manifest alignment against live code and pins."""
+    errors: list[str] = []
+    manifest_path = anneal_root / "ci/docs_surface_manifest.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        return [
+            "missing ci/docs_surface_manifest.json (required to detect CLI, "
+            "theory, skill, and toolchain drift)"
+        ]
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        return [f"ci/docs_surface_manifest.json: invalid JSON: {exc}"]
+    if not isinstance(manifest, dict) or manifest.get("schema_version") != 1:
+        return ["ci/docs_surface_manifest.json: schema_version must be 1"]
+
+    allowed_top = {
+        "schema_version",
+        "freshness_contract",
+        "cli",
+        "receipt",
+        "toolchain_pins",
+        "theory_modules",
+        "skills",
+        "tutor_guides",
+    }
+    unknown = set(manifest.keys()) - allowed_top
+    if unknown:
+        errors.append(
+            f"ci/docs_surface_manifest.json: unknown keys {sorted(unknown)}"
+        )
+
+    pages = _collect_rendered_book_pages(anneal_root)
+    alpha_path = anneal_root / "docs/alpha.md"
+    alpha_text = (
+        alpha_path.read_text(encoding="utf-8") if alpha_path.is_file() else None
+    )
+    if alpha_text is None:
+        errors.append("missing docs/alpha.md")
+
+    _check_cli_manifest(
+        anneal_root, manifest.get("cli"), pages, alpha_text, errors
+    )
+    _check_receipt_and_pins_manifest(
+        anneal_root, manifest, pages, alpha_text, errors
+    )
+    _check_theory_and_skills_manifest(
+        anneal_root, manifest, pages, alpha_text, errors
+    )
+
+    guides_dir = anneal_root / "book/src/guides"
+    actual_guides = (
+        {p.name for p in guides_dir.glob("*.md") if p.is_file()}
+        if guides_dir.is_dir()
+        else set()
+    )
+    t_guides = manifest.get("tutor_guides")
+    if not isinstance(t_guides, dict) or set(t_guides.keys()) != actual_guides:
+        errors.append(
+            f"docs_surface_manifest.json: `tutor_guides` keys {sorted(t_guides or {})} "
+            f"!= book/src/guides/*.md {sorted(actual_guides)}"
+        )
+    else:
+        for g_name, g_meta in sorted(t_guides.items()):
+            gctx = f"tutor_guides[{g_name!r}]"
+            if not isinstance(g_meta, dict):
+                errors.append(f"{gctx}: must be an object")
+                continue
+            ex_dir = g_meta.get("example_dir")
+            if (
+                not isinstance(ex_dir, str)
+                or not (anneal_root / "book" / ex_dir / "case.json").is_file()
+            ):
+                errors.append(f"{gctx}: missing `{ex_dir}/case.json` under book/")
+            rel_page = f"guides/{g_name}"
+            _check_manifest_page_tokens(
+                pages,
+                [rel_page],
+                list(g_meta.get("covers_surfaces") or []),
+                gctx,
+                errors,
+            )
+            txt = pages.get(rel_page, "")
+            if "alpha software" not in txt.lower():
+                errors.append(
+                    f"book/src/{rel_page}: missing explicit alpha software disclaimer"
+                )
+            if "alpha.md" not in txt:
+                errors.append(f"book/src/{rel_page}: missing link to docs/alpha.md")
+
+    if "index.md" in pages and "alpha software" not in pages["index.md"].lower():
+        errors.append("book/src/index.md: missing explicit alpha software disclaimer")
+
+    fc = manifest.get("freshness_contract")
+    if not isinstance(fc, dict) or not isinstance(fc.get("doc"), str):
+        errors.append("docs_surface_manifest.json: `freshness_contract.doc` required")
+    else:
+        fc_path = anneal_root / fc["doc"]
+        if not fc_path.is_file():
+            errors.append(f"freshness_contract: missing doc `{fc['doc']}`")
+        else:
+            fc_text = fc_path.read_text(encoding="utf-8")
+            for tok in fc.get("required_tokens") or []:
+                if tok not in fc_text:
+                    errors.append(
+                        f"{fc['doc']}: missing freshness contract token `{tok}`"
+                    )
+    return errors
+
+
 def check_sources(anneal_root: Path) -> list[str]:
     """Validate book Markdown sources, fences, directives, examples, and governing docs."""
     errors: list[str] = []
@@ -2009,6 +2990,11 @@ def check_sources(anneal_root: Path) -> list[str]:
                     f"book/src/SUMMARY.md: missing or invalid chapter target `{target_rel}`"
                 )
 
+    if (anneal_root / "ci/docs_surface_manifest.json").is_file() or (
+        anneal_root / "trusted/cargo-anneal/src/cli.rs"
+    ).is_file():
+        errors.extend(check_surface_freshness(anneal_root))
+
     return errors
 
 
@@ -2151,7 +3137,7 @@ def _assert_and_summarize_receipt(
             f"{case_file}: step[{step_idx}] wrong schema_version: "
             f"{receipt.get('schema_version')!r}"
         )
-    if receipt.get("status") != expect_receipt["status"]:
+    if "status" in expect_receipt and receipt.get("status") != expect_receipt["status"]:
         errors.append(
             f"{case_file}: step[{step_idx}] expected status "
             f"{expect_receipt['status']!r}, got {receipt.get('status')!r} "
@@ -3188,12 +4174,6 @@ def main(argv: list[str] | None = None) -> int:
                     "ANNEAL_CAPTURE/ANNEAL_SYSROOT/ANNEAL_LEAN), or omit all "
                     "three to use an installed toolchain bundle"
                 )
-            host_xdg = os.environ.get("XDG_CACHE_HOME", "")
-            has_bundle = bool(
-                host_xdg and (Path(host_xdg) / "anneal" / "toolchain").is_dir()
-            )
-            if has_bundle and not any(explicit_tools):
-                capture_path = sysroot_path = lean_path = None
             errors.extend(
                 verify_examples(
                     anneal_root,

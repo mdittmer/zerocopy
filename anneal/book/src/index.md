@@ -33,7 +33,8 @@ computing base (TCB).
 > guidance and a working starter example). Inline Rust specifications and
 > broader MIR coverage are under development. To keep this book accurate, every
 > command and code example shown here is executed against the current
-> `cargo-anneal` build in CI. See
+> `cargo-anneal` build in CI alongside static surface-drift checks for CLI
+> flags, bundled theory libraries, skills, and pinned toolchains. See
 > [Alpha Usage and Profile v1 Limits](https://github.com/google/zerocopy/blob/main/anneal/docs/alpha.md)
 > on GitHub for the exact supported and fail-closed refused Rust subset.
 

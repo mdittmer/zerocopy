@@ -939,6 +939,71 @@ class CiWorkflowManifestGuardTests(unittest.TestCase):
             )
             self.assertNotEqual(res.returncode, 0)
 
+    def test_docs_and_tutor_verification_wired_in_static_and_installed_smoke(
+        self,
+    ):
+        jobs = self.workflow["jobs"]
+        static_steps = jobs["static-checks"]["steps"]
+        static_doc_steps = [
+            s
+            for s in static_steps
+            if "ci/check_docs.py" in s.get("run", "")
+        ]
+        self.assertEqual(len(static_doc_steps), 1)
+        self.assertIn("--check-sources", static_doc_steps[0]["run"])
+
+        smoke_steps = jobs["installed-smoke"]["steps"]
+        smoke_doc_steps = [
+            s
+            for s in smoke_steps
+            if "ci/check_docs.py" in s.get("run", "")
+        ]
+        self.assertEqual(len(smoke_doc_steps), 1)
+        smoke_run = smoke_doc_steps[0]["run"]
+        for req_flag in (
+            "--check-sources",
+            "--verify-examples",
+            "--cargo-anneal",
+            "--build",
+        ):
+            self.assertIn(req_flag, smoke_run)
+        for token in (
+            "ACTIONS_CACHE_URL",
+            "ACTIONS_RESULTS_URL",
+            "ACTIONS_RUNTIME_TOKEN",
+        ):
+            self.assertEqual(smoke_doc_steps[0].get("env", {}).get(token), "")
+
+        anneal_yml = SOURCE.parent.parent / ".github/workflows/anneal.yml"
+        if anneal_yml.is_file():
+            top_wf = load_workflow_yaml(anneal_yml.read_text())
+            if "detect_changes" in top_wf.get("jobs", {}):
+                filter_run = next(
+                    s["run"]
+                    for s in top_wf["jobs"]["detect_changes"]["steps"]
+                    if s.get("id") == "filter"
+                )
+                self.assertIn("non_anneal_prefixes", filter_run)
+                for protected in (
+                    "anneal/book/src/guides/01-init-and-first-verify.md",
+                    "anneal/skills/spec-authoring/SKILL.md",
+                    "anneal/trusted/cargo-anneal/src/cli.rs",
+                    "anneal/theory/bundle-manifest.json",
+                    "anneal/docs/alpha.md",
+                ):
+                    self.assertFalse(
+                        any(
+                            protected.startswith(pfx)
+                            for pfx in (
+                                "zerocopy/",
+                                "evals/",
+                                "tools/",
+                                "maintainers/",
+                            )
+                        ),
+                        protected,
+                    )
+
 
 if __name__ == "__main__":
     unittest.main()
