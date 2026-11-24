@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "compilation": {
+    "source_root": ".",
+    "crate_root": "lib.rs",
+    "crate_name": "flag_sanitizer",
+    "source_files": ["lib.rs"]
+  },
+  "scope": {
+    "kind": "selected_unit",
+    "roots": ["sanitize_flags"]
+  },
+  "proof": {
+    "source_root": ".",
+    "sources": [
+      { "module": "Spec", "path": "Spec.lean", "role": "specification" },
+      { "module": "Proof", "path": "Proof.lean", "role": "proof" }
+    ]
+  }
+}

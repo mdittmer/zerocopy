@@ -1,0 +1,42 @@
+-- Copyright 2026 The Fuchsia Authors
+--
+-- Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
+-- <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+-- license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+-- This file may not be copied, modified, or distributed except according to
+-- those terms.
+
+prelude
+import Init.Data.BitVec.Basic
+import Trusted.MirSemantics
+
+namespace Spec
+
+open Trusted.MirAst Trusted.MirSemantics
+
+def u64Val (w : BitVec 64) : Val :=
+  .scalar ⟨.i64, false, BitVec.ofNat 128 w.toNat⟩
+
+def expectedFlags (flags force allow : BitVec 64) : BitVec 64 :=
+  (flags ||| force) &&& allow
+
+def respectsPolicy (program : Program) : Prop :=
+  ∀ flags force allow : BitVec 64,
+    Behavior (entryProgForBody program 0)
+      { args := [u64Val flags, u64Val force, u64Val allow] }
+      (.returned ⟨u64Val (expectedFlags flags force allow), ⟨[]⟩⟩)
+
+def clearsDisallowed (program : Program) : Prop :=
+  ∀ flags force allow : BitVec 64,
+    ∃ out : BitVec 64,
+      Behavior (entryProgForBody program 0)
+        { args := [u64Val flags, u64Val force, u64Val allow] }
+        (.returned ⟨u64Val out, ⟨[]⟩⟩) ∧
+      (out &&& ~~~allow) = 0#64
+
+def specs : Specs :=
+  { safety := fun _ _ => True
+    property := fun program =>
+      respectsPolicy program ∧ clearsDisallowed program }
+
+end Spec

@@ -1,0 +1,31 @@
+-- Copyright 2026 The Fuchsia Authors
+--
+-- Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
+-- <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+-- license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+-- This file may not be copied, modified, or distributed except according to
+-- those terms.
+
+prelude
+import Init.Data.BitVec.Basic
+import Trusted.MirSemantics
+
+namespace Spec
+
+open Trusted.MirAst Trusted.MirSemantics
+
+def u64Val (w : BitVec 64) : Val :=
+  .scalar ⟨.i64, false, BitVec.ofNat 128 w.toNat⟩
+
+def matchesPermissionMask (program : Program) : Prop :=
+  ∀ requested allowed : BitVec 64,
+    Behavior (entryProgForBody program 0)
+      { args := [u64Val requested, u64Val allowed] }
+      (.returned ⟨u64Val (requested &&& allowed), ⟨[]⟩⟩)
+
+def specs : Specs :=
+  { safety := fun _ _ => True
+    property := fun program =>
+      matchesPermissionMask program }
+
+end Spec

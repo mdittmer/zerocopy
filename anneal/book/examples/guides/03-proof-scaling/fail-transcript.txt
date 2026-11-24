@@ -1,0 +1,9 @@
+$ cargo anneal verify --request request.json
+{
+  "schema_version": 3,
+  "status": "proof_failed",
+  "phase": "audit",
+  "elaboration_sandbox": "<linux_bwrap | linux_landlock_seccomp>",
+  "taint_reasons": [],
+  "hint": "Proof.lean:82:4: Application type mismatch: The argument rfl has type ?m.127 = ?m.127 but is expected to have type evalStep (bodyProg Captured.body_0) 0 (mkS...."
+}

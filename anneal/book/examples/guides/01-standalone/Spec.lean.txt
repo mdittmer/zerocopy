@@ -1,0 +1,19 @@
+prelude
+import Trusted.MirSemantics
+
+namespace Spec
+
+open Trusted.MirAst Trusted.MirSemantics
+
+def expectedReturn : TerminalOut :=
+  .returned ⟨.scalar ⟨.i64, false, BitVec.ofNat 128 0⟩, ⟨[]⟩⟩
+
+noncomputable def returnsZero (program : Program) : Prop :=
+  let entry := entryProgForBody program 0
+  let call : Query := { args := [] }
+  SatisfiesPost entry call (fun outcome => outcome = expectedReturn) ∧
+    (¬ Diverges entry call) ∧ Behavior entry call expectedReturn
+
+noncomputable def specs : Specs := ⟨fun _ _ => True, returnsZero⟩
+
+end Spec

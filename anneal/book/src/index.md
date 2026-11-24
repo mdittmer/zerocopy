@@ -14,19 +14,26 @@ and satisfy developer-defined specifications, with Lean 4's kernel checking ever
 proof while keeping human review bounded to specifications and the trusted
 computing base (TCB).
 
-> **Alpha status (Stage 0):** Anneal is in alpha and under active development;
-> APIs, specification syntax, and verification coverage change frequently. The
-> current CLI ships `cargo anneal setup` (versioned toolchain archive
-> installation), `cargo anneal init` (starter `Spec.lean` and `Proof.lean`
-> scaffolding or a runnable `--standalone` example), `cargo anneal verify`
-> (including `--request`, `--manifest-path`/`--proof-dir` for dependency-free
-> library or binary crates with optional `--panic` and `--instantiate`, and
-> `verify rustc` for the `x86_64-unknown-linux-gnu` pointer-free scalar MIR
-> profile using out-of-line `Spec.lean` and `Proof.lean` modules), and
-> `cargo anneal skill` (bundled verification guidance and a working starter
-> example). Inline Rust specifications and broader MIR coverage are under
-> development. To keep this book accurate, every command and code example shown
-> here is executed against the current `cargo-anneal` build in CI. See
+> **This is alpha software! (Stage 0)** Anneal is in alpha and under active
+> development; APIs, specification syntax, and verification coverage change
+> frequently, and its Trusted Computing Base (TCB) audit and complete
+> review-surface reporting remain in progress. Today it checks only a small,
+> call-free, pointer-free scalar subset of Rust (`Profile v1` on
+> `x86_64-unknown-linux-gnu`), and passing runs depend on an intact build host
+> (`rustc`, `build.rs`, and proc-macros run outside the Lean sandbox) as well
+> as human review of specifications (`Spec.lean`), compilation/scope inputs
+> (`request.json` or `verify rustc` flags), and TCB audit logs. The current CLI
+> ships `cargo anneal setup` (versioned toolchain archive installation),
+> `cargo anneal init` (starter `Spec.lean` and `Proof.lean` scaffolding or a
+> runnable `--standalone` example), `cargo anneal verify` (including
+> `--request`, `--manifest-path`/`--proof-dir` for dependency-free library or
+> binary crates with optional `--panic`, `--select`, and `--instantiate`, and
+> `verify rustc` for build-system integration using out-of-line `Spec.lean` and
+> `Proof.lean` modules), and `cargo anneal skill` (bundled verification
+> guidance and a working starter example). Inline Rust specifications and
+> broader MIR coverage are under development. To keep this book accurate, every
+> command and code example shown here is executed against the current
+> `cargo-anneal` build in CI. See
 > [Alpha Usage and Profile v1 Limits](https://github.com/google/zerocopy/blob/main/anneal/docs/alpha.md)
 > on GitHub for the exact supported and fail-closed refused Rust subset.
 
@@ -64,6 +71,11 @@ Every command transcript in this book is checked directly against the live
 - [Installing the Toolchain](getting-started/installation.md) walks through
   `cargo anneal setup`, local archives, cache cleanup, and fail-closed archive
   handling.
+- [Your First Standalone Proof](guides/01-init-and-first-verify.md),
+  [Specs, Requests, and Profile v1](guides/02-specs-and-requests.md),
+  [Discharging and Scaling Scalar Proofs](guides/03-proof-scaling.md), and
+  [Direct Compilation with `verify rustc`](guides/04-verify-rustc-fuchsia.md)
+  walk through Stage 0 workflows with live-checked Lean proofs and mutations.
 - [CLI Reference](reference/cli.md) documents `setup`, `init`, `skill`,
   `verify`, `verify rustc`, Receipt Schema v3 diagnostics, and CLI error
   handling.

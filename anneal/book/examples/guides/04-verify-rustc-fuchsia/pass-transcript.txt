@@ -1,0 +1,32 @@
+$ cargo anneal verify rustc src/lib.rs --crate-name guest_width --source-file src/width.rs --select width::mask_width --spec-file Spec=proof/Spec.lean --proof-file Proof=proof/Proof.lean
+{
+  "schema_version": 3,
+  "status": "selected_unit_verified",
+  "experimental": true,
+  "elaboration_sandbox": "<linux_bwrap | linux_landlock_seccomp>",
+  "taint_reasons": [],
+  "spec_warnings": [],
+  "scope": {
+    "kind": "selected_unit",
+    "roots": [
+      "width::mask_width"
+    ]
+  },
+  "selected": [
+    {
+      "body_index": 0,
+      "def_id": 4,
+      "path": "width::mask_width"
+    }
+  ],
+  "assumptions": [
+    "faithful pinned compiler capture",
+    "experimental pointer-free MIR semantics",
+    "Lean kernel and admitted foundation",
+    "intact compiler and verification environment"
+  ],
+  "deferred": [
+    "complete review-surface reporting",
+    "source-to-deployed-binary correspondence"
+  ]
+}

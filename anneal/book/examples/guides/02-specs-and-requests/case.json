@@ -1,0 +1,87 @@
+{
+  "kind": "tutor",
+  "description": "Verify out-of-line Spec.lean and request.json over a 64-bit permission mask",
+  "artifacts": [
+    {
+      "file": "lib.rs",
+      "role": "input",
+      "stage_as": "lib.rs"
+    },
+    {
+      "file": "request.json",
+      "role": "input",
+      "stage_as": "request.json"
+    },
+    {
+      "file": "Spec.lean.txt",
+      "role": "input",
+      "stage_as": "Spec.lean"
+    },
+    {
+      "file": "Proof.lean.txt",
+      "role": "input",
+      "stage_as": "Proof.lean"
+    },
+    {
+      "file": "broken-lib.rs",
+      "role": "mutation_source"
+    }
+  ],
+  "steps": [
+    {
+      "display_command": "$ cargo anneal verify --request request.json",
+      "argv": [
+        "anneal",
+        "verify",
+        "--request",
+        "request.json"
+      ],
+      "expect_exit": 0,
+      "expect_receipt": {
+        "schema_version": 3,
+        "status": "selected_unit_verified",
+        "experimental": true,
+        "elaboration_sandbox_in": [
+          "linux_bwrap",
+          "linux_landlock_seccomp"
+        ],
+        "spec_warnings": [],
+        "scope": {
+          "kind": "selected_unit",
+          "roots": [
+            "apply_permission_mask"
+          ]
+        }
+      },
+      "output_mode": "receipt_summary",
+      "transcript": "pass-transcript.txt"
+    },
+    {
+      "display_command": "$ cargo anneal verify --request request.json",
+      "argv": [
+        "anneal",
+        "verify",
+        "--request",
+        "request.json"
+      ],
+      "copy_files": [
+        {
+          "src": "broken-lib.rs",
+          "dest": "lib.rs"
+        }
+      ],
+      "expect_exit": 1,
+      "expect_receipt": {
+        "schema_version": 3,
+        "status": "proof_failed",
+        "phase": "audit",
+        "elaboration_sandbox_in": [
+          "linux_bwrap",
+          "linux_landlock_seccomp"
+        ]
+      },
+      "output_mode": "receipt_summary",
+      "transcript": "fail-transcript.txt"
+    }
+  ]
+}

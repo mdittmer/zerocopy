@@ -1,0 +1,32 @@
+$ cargo anneal verify --request hello/request.json
+{
+  "schema_version": 3,
+  "status": "selected_unit_verified",
+  "experimental": true,
+  "elaboration_sandbox": "<linux_bwrap | linux_landlock_seccomp>",
+  "taint_reasons": [],
+  "spec_warnings": [],
+  "scope": {
+    "kind": "selected_unit",
+    "roots": [
+      "zero"
+    ]
+  },
+  "selected": [
+    {
+      "body_index": 0,
+      "def_id": 3,
+      "path": "zero"
+    }
+  ],
+  "assumptions": [
+    "faithful pinned compiler capture",
+    "experimental pointer-free MIR semantics",
+    "Lean kernel and admitted foundation",
+    "intact compiler and verification environment"
+  ],
+  "deferred": [
+    "complete review-surface reporting",
+    "source-to-deployed-binary correspondence"
+  ]
+}

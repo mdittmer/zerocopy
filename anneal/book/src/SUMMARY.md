@@ -14,6 +14,13 @@ those terms. -->
 
 - [Installing the Toolchain](getting-started/installation.md)
 
+# Guides
+
+- [Your First Standalone Proof](guides/01-init-and-first-verify.md)
+- [Specs, Requests, and Profile v1](guides/02-specs-and-requests.md)
+- [Discharging and Scaling Scalar Proofs](guides/03-proof-scaling.md)
+- [Direct Compilation with `verify rustc`](guides/04-verify-rustc-fuchsia.md)
+
 # Reference
 
 - [CLI Reference](reference/cli.md)

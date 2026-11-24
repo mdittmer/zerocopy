@@ -1,0 +1,43 @@
+-- Copyright 2026 The Fuchsia Authors
+--
+-- Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
+-- <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+-- license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+-- This file may not be copied, modified, or distributed except according to
+-- those terms.
+
+prelude
+import Init.Data.BitVec.Basic
+import Trusted.MirSemantics
+
+namespace Spec
+
+open Trusted.MirAst Trusted.MirSemantics
+
+def u64Val (w : BitVec 64) : Val :=
+  .scalar ⟨.i64, false, BitVec.ofNat 128 w.toNat⟩
+
+def widthMaskBits : Nat → BitVec 64
+  | 0 => BitVec.ofNat 64 0xff
+  | 1 => BitVec.ofNat 64 0xffff
+  | 2 => BitVec.ofNat 64 0xffff_ffff
+  | _ => BitVec.allOnes 64
+
+def widthArg (body : Body) (idx : Nat) : Val :=
+  match body.locals with
+  | _ :: (.enum ety) :: _ => .enumVal ety idx
+  | _ => .unit
+
+def masksWidth (program : Program) (body : Body) : Prop :=
+  ∀ idx : Fin 4, ∀ value : BitVec 64,
+    Behavior (entryProgForBody program 0)
+      { args := [widthArg body idx.val, u64Val value] }
+      (.returned ⟨u64Val (value &&& widthMaskBits idx.val), ⟨[]⟩⟩)
+
+def specs : Specs :=
+  { safety := fun _ _ => True
+    property := fun program =>
+      ∃ body, program.bodies = [body] ∧
+        masksWidth program body }
+
+end Spec

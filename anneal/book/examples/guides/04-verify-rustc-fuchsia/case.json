@@ -1,0 +1,107 @@
+{
+  "kind": "tutor",
+  "description": "Verify a multi-file crate using cargo anneal verify rustc directly without request.json",
+  "artifacts": [
+    {
+      "file": "lib.rs",
+      "role": "input",
+      "stage_as": "src/lib.rs"
+    },
+    {
+      "file": "width.rs",
+      "role": "input",
+      "stage_as": "src/width.rs"
+    },
+    {
+      "file": "Spec.lean.txt",
+      "role": "input",
+      "stage_as": "proof/Spec.lean"
+    },
+    {
+      "file": "Proof.lean.txt",
+      "role": "input",
+      "stage_as": "proof/Proof.lean"
+    },
+    {
+      "file": "broken-width.rs",
+      "role": "mutation_source"
+    }
+  ],
+  "steps": [
+    {
+      "display_command": "$ cargo anneal verify rustc src/lib.rs --crate-name guest_width --source-file src/width.rs --select width::mask_width --spec-file Spec=proof/Spec.lean --proof-file Proof=proof/Proof.lean",
+      "argv": [
+        "anneal",
+        "verify",
+        "rustc",
+        "src/lib.rs",
+        "--crate-name",
+        "guest_width",
+        "--source-file",
+        "src/width.rs",
+        "--select",
+        "width::mask_width",
+        "--spec-file",
+        "Spec=proof/Spec.lean",
+        "--proof-file",
+        "Proof=proof/Proof.lean"
+      ],
+      "expect_exit": 0,
+      "expect_receipt": {
+        "schema_version": 3,
+        "status": "selected_unit_verified",
+        "experimental": true,
+        "elaboration_sandbox_in": [
+          "linux_bwrap",
+          "linux_landlock_seccomp"
+        ],
+        "spec_warnings": [],
+        "scope": {
+          "kind": "selected_unit",
+          "roots": [
+            "width::mask_width"
+          ]
+        }
+      },
+      "output_mode": "receipt_summary",
+      "transcript": "pass-transcript.txt"
+    },
+    {
+      "display_command": "$ cargo anneal verify rustc src/lib.rs --crate-name guest_width --source-file src/width.rs --select width::mask_width --spec-file Spec=proof/Spec.lean --proof-file Proof=proof/Proof.lean",
+      "argv": [
+        "anneal",
+        "verify",
+        "rustc",
+        "src/lib.rs",
+        "--crate-name",
+        "guest_width",
+        "--source-file",
+        "src/width.rs",
+        "--select",
+        "width::mask_width",
+        "--spec-file",
+        "Spec=proof/Spec.lean",
+        "--proof-file",
+        "Proof=proof/Proof.lean"
+      ],
+      "copy_files": [
+        {
+          "src": "broken-width.rs",
+          "dest": "src/width.rs"
+        }
+      ],
+      "expect_exit": 1,
+      "expect_receipt": {
+        "schema_version": 3,
+        "status": "proof_failed",
+        "phase": "audit",
+        "elaboration_sandbox_in": [
+          "linux_bwrap",
+          "linux_landlock_seccomp"
+        ]
+      },
+      "output_mode": "receipt_summary",
+      "transcript": "fail-transcript.txt"
+    }
+  ]
+}

@@ -1,0 +1,100 @@
+{
+  "kind": "tutor",
+  "description": "Scaffold a standalone scalar proof and check live pass and proof_failed receipts",
+  "artifacts": [
+    {
+      "file": "lib.rs",
+      "role": "generated",
+      "workdir_path": "hello/lib.rs"
+    },
+    {
+      "file": "request.json",
+      "role": "generated",
+      "workdir_path": "hello/request.json"
+    },
+    {
+      "file": "Spec.lean.txt",
+      "role": "generated",
+      "workdir_path": "hello/Spec.lean"
+    },
+    {
+      "file": "Proof.lean.txt",
+      "role": "generated",
+      "workdir_path": "hello/Proof.lean"
+    },
+    {
+      "file": "broken-lib.rs",
+      "role": "mutation_source"
+    }
+  ],
+  "steps": [
+    {
+      "display_command": "$ cargo anneal init --standalone --proof-dir hello",
+      "argv": [
+        "anneal",
+        "init",
+        "--standalone",
+        "--proof-dir",
+        "hello"
+      ],
+      "expect_exit": 0,
+      "output_mode": "full",
+      "transcript": "init-transcript.txt"
+    },
+    {
+      "display_command": "$ cargo anneal verify --request hello/request.json",
+      "argv": [
+        "anneal",
+        "verify",
+        "--request",
+        "hello/request.json"
+      ],
+      "expect_exit": 0,
+      "expect_receipt": {
+        "schema_version": 3,
+        "status": "selected_unit_verified",
+        "experimental": true,
+        "elaboration_sandbox_in": [
+          "linux_bwrap",
+          "linux_landlock_seccomp"
+        ],
+        "spec_warnings": [],
+        "scope": {
+          "kind": "selected_unit",
+          "roots": [
+            "zero"
+          ]
+        }
+      },
+      "output_mode": "receipt_summary",
+      "transcript": "pass-transcript.txt"
+    },
+    {
+      "display_command": "$ cargo anneal verify --request hello/request.json",
+      "argv": [
+        "anneal",
+        "verify",
+        "--request",
+        "hello/request.json"
+      ],
+      "copy_files": [
+        {
+          "src": "broken-lib.rs",
+          "dest": "hello/lib.rs"
+        }
+      ],
+      "expect_exit": 1,
+      "expect_receipt": {
+        "schema_version": 3,
+        "status": "proof_failed",
+        "phase": "audit",
+        "elaboration_sandbox_in": [
+          "linux_bwrap",
+          "linux_landlock_seccomp"
+        ]
+      },
+      "output_mode": "receipt_summary",
+      "transcript": "fail-transcript.txt"
+    }
+  ]
+}

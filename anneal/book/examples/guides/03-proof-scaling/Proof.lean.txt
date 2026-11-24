@@ -1,0 +1,199 @@
+-- Copyright 2026 The Fuchsia Authors
+--
+-- Licensed under a BSD-style license <LICENSE-BSD>, Apache License, Version 2.0
+-- <LICENSE-APACHE or https://www.apache.org/licenses/LICENSE-2.0>, or the MIT
+-- license <LICENSE-MIT or https://opensource.org/licenses/MIT>, at your option.
+-- This file may not be copied, modified, or distributed except according to
+-- those terms.
+
+prelude
+import Init.Data.BitVec.Lemmas
+import Expected
+import Anneal.MirWp
+
+namespace Proof
+
+open Trusted.MirAst Trusted.MirSemantics Anneal.MirWp
+
+private theorem u64Val_eq_zeroExt (w : BitVec 64) :
+    Spec.u64Val w = .scalar ⟨.i64, false, bvZeroExtend 128 w⟩ := by
+  unfold Spec.u64Val
+  apply congrArg (fun b => Val.scalar ⟨.i64, false, b⟩)
+  apply bitVec_eq_of_toNat_eq
+  rw [bvZeroExtend_128_toNat]
+  exact Nat.mod_eq_of_lt (Nat.lt_trans w.isLt (by decide))
+
+private theorem u64Val_of_truncate {bits : BitVec 128}
+    (hTrunc : truncateBits .i64 bits = bits) :
+    Spec.u64Val (bvExtractLsb 63 0 bits) = .scalar ⟨.i64, false, bits⟩ := by
+  have hLt : bits.toNat < Nat.pow 2 64 := by
+    have hEq := congrArg BitVec.toNat hTrunc
+    rw [toNat_truncateBits] at hEq
+    rw [← hEq]
+    exact Nat.mod_lt _ (by decide)
+  have hMod : Nat.mod bits.toNat (Nat.pow 2 64) = bits.toNat :=
+    Nat.mod_eq_of_lt hLt
+  unfold Spec.u64Val bvExtractLsb
+  apply congrArg (fun b => Val.scalar ⟨.i64, false, b⟩)
+  apply bitVec_eq_of_toNat_eq
+  change Nat.mod (Nat.mod bits.toNat (Nat.pow 2 64)) (Nat.pow 2 128) = bits.toNat
+  rw [hMod]
+  exact Nat.mod_eq_of_lt (Nat.lt_trans hLt (by decide))
+
+private theorem u64BitOrVal_eq (x y : BitVec 64) :
+    u64BitOrVal x y = Spec.u64Val (x ||| y) := by
+  unfold u64BitOrVal Spec.u64Val
+  apply congrArg (fun b => Val.scalar ⟨.i64, false, b⟩)
+  apply bitVec_eq_of_toNat_eq
+  rfl
+
+private theorem u64BitAndVal_eq (x y : BitVec 64) :
+    u64BitAndVal x y = Spec.u64Val (x &&& y) := by
+  unfold u64BitAndVal Spec.u64Val
+  apply congrArg (fun b => Val.scalar ⟨.i64, false, b⟩)
+  apply bitVec_eq_of_toNat_eq
+  rfl
+
+private theorem executes_sanitize (flags force allow : BitVec 64) :
+    Executes Captured.body_0
+      (mkState 0 0 (initLocalsLoop Captured.body_0
+        [Spec.u64Val flags, Spec.u64Val force, Spec.u64Val allow]
+        0 Captured.body_0.locals))
+      (Spec.u64Val (Spec.expectedFlags flags force allow)) := by
+  unfold Spec.expectedFlags
+  rw [u64Val_eq_zeroExt flags, u64Val_eq_zeroExt force, u64Val_eq_zeroExt allow]
+  let v1 : Val := .scalar ⟨.i64, false, bvZeroExtend 128 flags⟩
+  let v2 : Val := .scalar ⟨.i64, false, bvZeroExtend 128 force⟩
+  let v3 : Val := .scalar ⟨.i64, false, bvZeroExtend 128 allow⟩
+  let orVal : Val := u64BitOrVal flags force
+  let orZe : Val := .scalar ⟨.i64, false, bvZeroExtend 128 (flags ||| force)⟩
+  let andVal : Val := u64BitAndVal (flags ||| force) allow
+  change Executes Captured.body_0
+    (mkState 0 0
+      [.immediate none, .immediate (some v1), .immediate (some v2),
+        .immediate (some v3), .dead, .dead, .dead, .dead])
+    (Spec.u64Val ((flags ||| force) &&& allow))
+  refine .next (next := mkState 0 1
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate none, .dead, .dead, .dead]) rfl ?_
+  refine .next (next := mkState 0 2
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate none, .immediate none, .dead, .dead])
+    rfl ?_
+  refine .next (next := mkState 0 3
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate none, .immediate (some v1),
+      .dead, .dead]) (step_u64Use flags rfl rfl) ?_
+  refine .next (next := mkState 0 4
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate none, .immediate (some v1),
+      .immediate none, .dead]) rfl ?_
+  refine .next (next := mkState 0 5
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate none, .immediate (some v1),
+      .immediate (some v2), .dead]) (step_u64Use force rfl rfl) ?_
+  refine .next (next := mkState 0 6
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate (some orVal), .immediate none,
+      .immediate none, .dead]) (step_u64Or flags force rfl rfl) ?_
+  have hOr : orVal = orZe :=
+    (u64BitOrVal_eq flags force).trans (u64Val_eq_zeroExt (flags ||| force))
+  rw [hOr]
+  refine .next (next := mkState 0 7
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate (some orZe), .immediate none,
+      .dead, .dead]) rfl ?_
+  refine .next (next := mkState 0 8
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate (some orZe), .dead,
+      .dead, .dead]) rfl ?_
+  refine .next (next := mkState 0 9
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate (some orZe), .dead, .dead,
+      .immediate none]) rfl ?_
+  refine .next (next := mkState 0 10
+    [.immediate none, .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate (some orZe), .dead, .dead,
+      .immediate (some v3)]) (step_u64Use allow rfl rfl) ?_
+  refine .next (next := mkState 0 11
+    [.immediate (some andVal), .immediate (some v1), .immediate (some v2),
+      .immediate (some v3), .immediate none, .dead, .dead,
+      .immediate none]) (step_u64And (flags ||| force) allow rfl rfl) ?_
+  have hAnd : andVal = Spec.u64Val ((flags ||| force) &&& allow) :=
+    u64BitAndVal_eq _ _
+  rw [hAnd]
+  refine .next (next := mkState 0 12
+    [.immediate (some (Spec.u64Val ((flags ||| force) &&& allow))),
+      .immediate (some v1), .immediate (some v2), .immediate (some v3),
+      .immediate none, .dead, .dead, .dead]) rfl ?_
+  refine .next (next := mkState 0 13
+    [.immediate (some (Spec.u64Val ((flags ||| force) &&& allow))),
+      .immediate (some v1), .immediate (some v2), .immediate (some v3),
+      .dead, .dead, .dead, .dead]) rfl ?_
+  exact .ret rfl
+
+private theorem cleared_by_mask (raw allow : BitVec 64) :
+    ((raw &&& allow) &&& ~~~allow) = 0#64 := by
+  apply BitVec.eq_of_getLsbD_eq
+  intro i hi
+  simp [BitVec.getLsbD_and, BitVec.getLsbD_not, hi, Bool.and_not_self]
+
+private theorem entryArgs_elim {p : List Val → Prop}
+    (hAll : ∀ a b c : BitVec 64,
+      p [Spec.u64Val a, Spec.u64Val b, Spec.u64Val c]) :
+    ∀ args, ValidEntryArgs Captured.body_0 args → p args := by
+  intro args hArgs
+  unfold ValidEntryArgs at hArgs
+  change checkArgsMatch args
+    [.int .i64 false, .int .i64 false, .int .i64 false] = true at hArgs
+  let ⟨a0, r0, h0, ha0, h1⟩ := checkArgsMatch_cons_iff.mp hArgs
+  let ⟨a1, r1, h1e, ha1, h2⟩ := checkArgsMatch_cons_iff.mp h1
+  let ⟨a2, r2, h2e, ha2, h3⟩ := checkArgsMatch_cons_iff.mp h2
+  have hNil : r2 = [] := checkArgsMatch_nil_iff.mp h3
+  subst h0; subst h1e; subst h2e; subst hNil
+  let ⟨b0, hb0, ht0⟩ := checkVal_int_iff.mp ha0
+  let ⟨b1, hb1, ht1⟩ := checkVal_int_iff.mp ha1
+  let ⟨b2, hb2, ht2⟩ := checkVal_int_iff.mp ha2
+  subst hb0; subst hb1; subst hb2
+  rw [← u64Val_of_truncate ht0, ← u64Val_of_truncate ht1,
+    ← u64Val_of_truncate ht2]
+  exact hAll _ _ _
+
+theorem verify : Expected.claim := by
+  refine ⟨rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_⟩
+  · intro id body hFound
+    cases id with
+    | succ _ => cases hFound
+    | zero =>
+      have hEq : Captured.body_0 = body := Option.some.inj hFound
+      subst body
+      refine bodyVerified_of_safe rfl rfl (fun args hArgs _ => ?_)
+      exact entryArgs_elim (fun a b c => executes_safe (executes_sanitize a b c))
+        args hArgs
+  · refine ⟨?_, ?_⟩
+    · intro flags force allow
+      have hValid : ValidEntryArgs Captured.body_0
+          [Spec.u64Val flags, Spec.u64Val force, Spec.u64Val allow] := by
+        unfold ValidEntryArgs
+        change checkArgsMatch _
+          [.int .i64 false, .int .i64 false, .int .i64 false] = true
+        rw [u64Val_eq_zeroExt flags, u64Val_eq_zeroExt force,
+          u64Val_eq_zeroExt allow]
+        simp [checkArgsMatch, checkVal_u64_bvZeroExtend]
+      exact behavior_of_returns rfl rfl hValid
+        (executes_returns (executes_sanitize flags force allow))
+    · intro flags force allow
+      have hValid : ValidEntryArgs Captured.body_0
+          [Spec.u64Val flags, Spec.u64Val force, Spec.u64Val allow] := by
+        unfold ValidEntryArgs
+        change checkArgsMatch _
+          [.int .i64 false, .int .i64 false, .int .i64 false] = true
+        rw [u64Val_eq_zeroExt flags, u64Val_eq_zeroExt force,
+          u64Val_eq_zeroExt allow]
+        simp [checkArgsMatch, checkVal_u64_bvZeroExtend]
+      exact ⟨Spec.expectedFlags flags force allow,
+        behavior_of_returns rfl rfl hValid
+          (executes_returns (executes_sanitize flags force allow)),
+        cleared_by_mask _ allow⟩
+
+end Proof

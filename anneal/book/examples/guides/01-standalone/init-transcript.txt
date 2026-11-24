@@ -1,0 +1,9 @@
+$ cargo anneal init --standalone --proof-dir hello
+Initialized standalone Anneal example:
+  hello/lib.rs
+  hello/request.json
+  hello/Spec.lean
+  hello/Proof.lean
+
+Next step:
+  cargo anneal verify --request hello/request.json

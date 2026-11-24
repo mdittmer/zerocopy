@@ -1,0 +1,9 @@
+$ cargo anneal verify rustc src/lib.rs --crate-name guest_width --source-file src/width.rs --select width::mask_width --spec-file Spec=proof/Spec.lean --proof-file Proof=proof/Proof.lean
+{
+  "schema_version": 3,
+  "status": "proof_failed",
+  "phase": "audit",
+  "elaboration_sandbox": "<linux_bwrap | linux_landlock_seccomp>",
+  "taint_reasons": [],
+  "hint": "Proof.lean:66:2: 'change' tactic failed, pattern Executes Captured.body_0 (mkState 0 0 [LocalSlot.immediate none, LocalSlot.immediate (some w0), LocalSlot.im... (+3 more Lean diagnostic(s))."
+}

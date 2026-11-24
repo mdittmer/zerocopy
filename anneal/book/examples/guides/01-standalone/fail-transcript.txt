@@ -1,0 +1,9 @@
+$ cargo anneal verify --request hello/request.json
+{
+  "schema_version": 3,
+  "status": "proof_failed",
+  "phase": "audit",
+  "elaboration_sandbox": "<linux_bwrap | linux_landlock_seccomp>",
+  "taint_reasons": [],
+  "hint": "Proof.lean:11:56: Type mismatch rfl has type ?m.10 = ?m.10 but is expected to have type execProg (entryProgForBody Captured.program 0) 2 { args := [] } fun ou... (+1 more Lean diagnostic(s)). Check that the Rust body satisfies `Spec` and that indices/types in `Proof.lean` match `Captured.program`."
+}
